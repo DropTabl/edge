@@ -50,6 +50,12 @@ import 'noop_ingest.dart';
 @visibleForTesting
 int kNoopBackupPageRows = 20000;
 
+/// Plausible unix seconds. A timestamp outside this range is corrupt or
+/// millisecond-scaled, and letting one into the day walk would march it across
+/// decades one day at a time.
+const int _kMinPlausibleTs = 1000000000; // 2001-09-09
+const int _kMaxPlausibleTs = 4102444800; // 2100-01-01
+
 class NoopBackupImporter {
   /// Import an already-extracted `noop-backup.sqlite` at [path].
   ///
@@ -167,8 +173,8 @@ class NoopBackupImporter {
       );
     }
     await ingest.finish();
-    return NoopImportResult(
-        ingest.days, ingest.rows, ingest.lateRows, ingest.steps);
+    return NoopImportResult(ingest.days, ingest.rows, ingest.lateRows,
+        ingest.steps, ingest.strandedDates);
   }
 
   /// Page one table's rows for the half-open window [from, to) into [onRow].
@@ -194,6 +200,14 @@ class NoopBackupImporter {
     Future<void> Function(Map<String, Object?> row) onRow,
   ) async {
     if (!tables.contains(table)) return;
+    // The COLUMNS are probed too, not just the table. `spo2Sample` is the one
+    // table documented as never seen non-empty, i.e. the one whose column names
+    // are least confirmed — and a rename would surface as a raw
+    // `no such column` SQL error mid-import, after days had already been
+    // written, with `finish()` never reached to roll the rollups forward.
+    final have = await _columnNames(src, table);
+    final usable = [for (final c in cols) if (have.contains(c)) c];
+    if (!usable.contains('ts') || usable.length < cols.length) return;
     var cursor = from - 1;
     while (true) {
       final rows = await src.query(
@@ -231,7 +245,21 @@ class NoopBackupImporter {
         await onRow(rows[i]);
       }
       if (!full) return;
-      cursor = end == rows.length ? lastTs : lastTs - 1;
+      final next = end == rows.length ? lastTs : lastTs - 1;
+      if (next > cursor) {
+        cursor = next;
+        continue;
+      }
+      // No progress. Reachable only if `ts` is a REAL column whose values
+      // truncate onto the same second (a GRDB `Date` is stored that way), where
+      // holding back the trailing second leaves the cursor exactly where it
+      // was. Looping would hang the import outright, and re-reading the page
+      // would append every RR beat in it a second time — so take the whole page
+      // and step past that second.
+      for (var i = end; i < rows.length; i++) {
+        await onRow(rows[i]);
+      }
+      cursor = lastTs;
     }
   }
 
@@ -248,17 +276,27 @@ class NoopBackupImporter {
       'stepSample',
     ]) {
       if (!tables.contains(t)) continue;
-      final r = await src.rawQuery('SELECT MIN(ts) AS lo, MAX(ts) AS hi FROM $t');
+      // The plausibility bound is applied INSIDE the aggregate, not to its
+      // result. MIN/MAX collapse the table to two rows, so a single corrupt
+      // timestamp — one `ts = 0`, one millisecond-scaled row — would otherwise
+      // disqualify the entire table and, if every table has one, fail the
+      // import as "no samples" on a backup holding years of data.
+      final r = await src.rawQuery(
+        'SELECT MIN(ts) AS lo, MAX(ts) AS hi FROM $t WHERE ts >= ? AND ts <= ?',
+        [_kMinPlausibleTs, _kMaxPlausibleTs],
+      );
       if (r.isEmpty) continue;
       final a = _int(r.first['lo']), b = _int(r.first['hi']);
       if (a == null || b == null) continue;
-      // Guard against a corrupt or millisecond-scaled timestamp column: a value
-      // outside plausible unix seconds would make the day walk run for years.
-      if (a < 1000000000 || b > 4102444800) continue;
       lo = lo == null || a < lo ? a : lo;
       hi = hi == null || b > hi ? b : hi;
     }
     return (lo == null || hi == null) ? null : (lo, hi);
+  }
+
+  static Future<Set<String>> _columnNames(Database src, String table) async {
+    final rows = await src.rawQuery('PRAGMA table_info($table)');
+    return {for (final r in rows) (r['name'] as String?) ?? ''};
   }
 
   static Future<Set<String>> _tableNames(Database src) async {

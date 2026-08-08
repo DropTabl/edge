@@ -69,7 +69,15 @@ class NoopImportResult {
   /// so they are counted here rather than silently dropped — a non-zero value
   /// means the source was not fully time-ordered.
   final int lateRows;
-  NoopImportResult(this.days, this.rows, [this.lateRows = 0, this.steps = 0]);
+
+  /// Dates the source presented out of order, after a later date had already
+  /// opened. They were used as context for the following day but never derived
+  /// in their own right, so they are missing from the import — reported so an
+  /// unordered source is visible rather than quietly short.
+  final Set<String> strandedDates;
+
+  NoopImportResult(this.days, this.rows,
+      [this.lateRows = 0, this.steps = 0, this.strandedDates = const {}]);
 }
 
 class NoopImporter {
@@ -246,8 +254,8 @@ class NoopImporter {
     }
 
     await ingest.finish();
-    return NoopImportResult(
-        ingest.days, ingest.rows, ingest.lateRows, ingest.steps);
+    return NoopImportResult(ingest.days, ingest.rows, ingest.lateRows,
+        ingest.steps, ingest.strandedDates);
   }
 
   /// Documented default column order (used only if the export omits its header).

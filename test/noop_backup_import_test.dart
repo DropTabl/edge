@@ -185,16 +185,21 @@ void main() {
     final dbPath = await writeNoopDb('c.sqlite', t0: t0, seconds: 120);
     final bak = writeBackup('c.noopbak', dbPath);
 
-    final before = tmp.listSync().whereType<Directory>().length;
+    // The extraction directory lives under systemTemp, which is machine-global
+    // — so compare against a snapshot rather than asserting it is empty, or an
+    // unrelated crashed run fails this test.
+    Set<String> extractions() => Directory.systemTemp
+        .listSync()
+        .whereType<Directory>()
+        .map((d) => p.basename(d.path))
+        .where((n) => n.startsWith('openstrap_noopbak_'))
+        .toSet();
+
+    final before = extractions();
     await NoopImporter.importFile(bak, const Profile(), DerivationEngine());
     // Nothing extracted survives — a 260 MB backup would otherwise leave a full
     // second copy behind on the phone.
-    final leftovers = Directory.systemTemp
-        .listSync()
-        .whereType<Directory>()
-        .where((d) => p.basename(d.path).startsWith('openstrap_noopbak_'));
-    expect(leftovers, isEmpty);
-    expect(tmp.listSync().whereType<Directory>().length, before);
+    expect(extractions().difference(before), isEmpty);
   }, timeout: const Timeout(Duration(minutes: 5)));
 
   test('no RR beat is lost to a page boundary inside a second', () async {
@@ -235,6 +240,43 @@ void main() {
         reason: 'every HR sample and every RR beat was read');
   }, timeout: const Timeout(Duration(minutes: 5)));
 
+  test('a NaN interval never reaches the substrate', () async {
+    // A REAL column can hold NaN, and NaN fails every comparison — so a
+    // `ms <= 0` guard passes it through. One NaN beat poisons the day's whole
+    // HRV computation rather than costing one interval.
+    const t0 = 1785919200; // 2026-08-05
+    final path = p.join(tmp.path, 'nan.sqlite');
+    if (File(path).existsSync()) File(path).deleteSync();
+    final src = await databaseFactory.openDatabase(path);
+    await src.execute('CREATE TABLE hrSample (deviceId TEXT, ts INTEGER, '
+        'bpm INTEGER, PRIMARY KEY (deviceId, ts))');
+    await src.execute('CREATE TABLE rrInterval (deviceId TEXT, ts INTEGER, '
+        'rrMs REAL, PRIMARY KEY (deviceId, ts, rrMs))');
+    final b = src.batch();
+    for (var i = 0; i < 120; i++) {
+      b.insert('hrSample', {'deviceId': 'd', 'ts': t0 + i, 'bpm': 65});
+      b.insert('rrInterval', {
+        'deviceId': 'd',
+        'ts': t0 + i,
+        'rrMs': i == 60 ? double.nan : 900.0,
+      });
+    }
+    await b.commit(noResult: true);
+    await src.close();
+    final bak = writeBackup('nan.noopbak', path);
+
+    final res = await NoopImporter.importFile(
+        bak, const Profile(), DerivationEngine());
+    expect(res.days, greaterThan(0), reason: 'the day still imports');
+
+    // Whatever the day computed, it must not be NaN-poisoned.
+    final db = await LocalDb.instance;
+    final rows = await db.query('day_result');
+    for (final r in rows) {
+      expect(r.values.whereType<double>().where((v) => v.isNaN), isEmpty);
+    }
+  }, timeout: const Timeout(Duration(minutes: 5)));
+
   test('a database that is not a NOOP backup is named, not silently empty',
       () async {
     final path = p.join(tmp.path, 'other.sqlite');
@@ -249,6 +291,118 @@ void main() {
           .having((e) => e.message, 'message', contains('hrSample'))),
     );
   });
+
+  test('one corrupt timestamp does not disqualify the whole table', () async {
+    // MIN/MAX collapse a table to two rows, so a single `ts = 0` used to drop
+    // that table from the span entirely — and if every table has one, a backup
+    // holding years of data imports as "no samples".
+    const t0 = 1786003200; // 2026-08-06
+    final path = p.join(tmp.path, 'corrupt.sqlite');
+    if (File(path).existsSync()) File(path).deleteSync();
+    final src = await databaseFactory.openDatabase(path);
+    await src.execute('CREATE TABLE hrSample (deviceId TEXT, ts INTEGER, '
+        'bpm INTEGER, PRIMARY KEY (deviceId, ts))');
+    final b = src.batch();
+    b.insert('hrSample', {'deviceId': 'd', 'ts': 0, 'bpm': 60}); // corrupt
+    for (var i = 0; i < 300; i++) {
+      b.insert('hrSample', {'deviceId': 'd', 'ts': t0 + i, 'bpm': 62});
+    }
+    await b.commit(noResult: true);
+    await src.close();
+    final bak = writeBackup('corrupt.noopbak', path);
+
+    final res = await NoopImporter.importFile(
+        bak, const Profile(), DerivationEngine());
+    expect(res.days, greaterThan(0));
+    expect(res.rows, 300, reason: 'the good rows import, the corrupt one does not');
+  }, timeout: const Timeout(Duration(minutes: 5)));
+
+  test('a long gap between blocks still derives the later day', () async {
+    // The prior-evening buffer used to be retained across ANY gap, handing the
+    // next day a Substrate spanning the whole thing. `calendarDays` walks that
+    // span a day at a time under a 400-iteration guard, so past ~400 days it
+    // never reaches the target date: the day is missing and the import still
+    // reports success.
+    const first = 1690000000; // 2023-07
+    const later = first + 500 * 86400;
+    final path = p.join(tmp.path, 'gap.sqlite');
+    if (File(path).existsSync()) File(path).deleteSync();
+    final src = await databaseFactory.openDatabase(path);
+    await src.execute('CREATE TABLE hrSample (deviceId TEXT, ts INTEGER, '
+        'bpm INTEGER, PRIMARY KEY (deviceId, ts))');
+    final b = src.batch();
+    for (final t0 in const [first, later]) {
+      for (var i = 0; i < 3600; i++) {
+        b.insert('hrSample', {'deviceId': 'd', 'ts': t0 + i, 'bpm': 62});
+      }
+    }
+    await b.commit(noResult: true);
+    await src.close();
+    final bak = writeBackup('gap.noopbak', path);
+
+    final res = await NoopImporter.importFile(
+        bak, const Profile(), DerivationEngine());
+    expect(res.days, 2, reason: 'both blocks derive, 500 days apart');
+  }, timeout: const Timeout(Duration(minutes: 10)));
+
+  test('a REAL timestamp column cannot hang the paging', () async {
+    // A GRDB `Date` is stored as a REAL. Sub-second values truncate onto the
+    // same second, which left the page cursor exactly where it was — an
+    // infinite loop, and every RR beat in the page re-appended on each pass.
+    const t0 = 1786089600; // 2026-08-07
+    final path = p.join(tmp.path, 'real.sqlite');
+    if (File(path).existsSync()) File(path).deleteSync();
+    final src = await databaseFactory.openDatabase(path);
+    await src.execute('CREATE TABLE hrSample (deviceId TEXT, ts REAL, '
+        'bpm INTEGER, PRIMARY KEY (deviceId, ts))');
+    final b = src.batch();
+    var n = 0;
+    for (var i = 0; i < 40; i++) {
+      // Several fractional samples inside each second.
+      for (final frac in const [0.2, 0.4, 0.6, 0.8]) {
+        b.insert('hrSample', {'deviceId': 'd', 'ts': t0 + i + frac, 'bpm': 60});
+        n++;
+      }
+    }
+    await b.commit(noResult: true);
+    await src.close();
+    final bak = writeBackup('real.noopbak', path);
+
+    final saved = kNoopBackupPageRows;
+    kNoopBackupPageRows = 4;
+    addTearDown(() => kNoopBackupPageRows = saved);
+
+    final res = await NoopImporter.importFile(
+        bak, const Profile(), DerivationEngine());
+    expect(res.rows, lessThanOrEqualTo(n),
+        reason: 'rows are never emitted twice');
+  }, timeout: const Timeout(Duration(minutes: 2)));
+
+  test('a renamed column is a message, not a raw SQL error mid-import',
+      () async {
+    const t0 = 1786176000; // 2026-08-08
+    final path = p.join(tmp.path, 'renamed.sqlite');
+    if (File(path).existsSync()) File(path).deleteSync();
+    final src = await databaseFactory.openDatabase(path);
+    await src.execute('CREATE TABLE hrSample (deviceId TEXT, ts INTEGER, '
+        'bpm INTEGER, PRIMARY KEY (deviceId, ts))');
+    // spo2Sample exists but has drifted — the table this code documents as
+    // never observed non-empty, i.e. the one least confirmed.
+    await src.execute('CREATE TABLE spo2Sample (deviceId TEXT, ts INTEGER, '
+        'redRaw INTEGER, irRaw INTEGER, PRIMARY KEY (deviceId, ts))');
+    final b = src.batch();
+    for (var i = 0; i < 300; i++) {
+      b.insert('hrSample', {'deviceId': 'd', 'ts': t0 + i, 'bpm': 61});
+    }
+    await b.commit(noResult: true);
+    await src.close();
+    final bak = writeBackup('renamed.noopbak', path);
+
+    final res = await NoopImporter.importFile(
+        bak, const Profile(), DerivationEngine());
+    expect(res.days, greaterThan(0),
+        reason: 'the drifted table is skipped, the rest still imports');
+  }, timeout: const Timeout(Duration(minutes: 5)));
 
   test('a backup with no samples says so rather than importing 0 days',
       () async {

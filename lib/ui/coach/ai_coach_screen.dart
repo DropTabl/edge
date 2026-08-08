@@ -312,7 +312,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
                 'Retry, or reopen the app once the phone has been unlocked.',
             actionLabel: 'Retry',
             onAction: () async {
-              await cfg.refreshKeyIfUnreadable();
+              await cfg.refreshKeyOnResume();
               if (mounted) setState(() {});
             },
           ).dsEnter(),

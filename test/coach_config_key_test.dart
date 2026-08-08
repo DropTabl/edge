@@ -7,6 +7,8 @@
 // while the phone is locked, when that item cannot be read. `load()` cached the
 // empty read as "no key", so the app asked the user to set one up again.
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -20,17 +22,33 @@ class _FakeKeychain {
   final List<Map<Object?, Object?>> writeOptions = [];
   bool locked = false;
   bool throwOnRead = false;
+  bool throwOnWrite = false;
+  bool hangReads = false;
+  final List<Completer<void>> _hung = [];
+
+  void releaseHung() {
+    for (final c in _hung) {
+      if (!c.isCompleted) c.complete();
+    }
+    _hung.clear();
+  }
 
   Future<Object?> handle(MethodCall call) async {
     final args = (call.arguments as Map?) ?? const {};
     switch (call.method) {
       case 'read':
         if (throwOnRead) throw PlatformException(code: 'keychain');
+        if (hangReads) {
+          final c = Completer<void>();
+          _hung.add(c);
+          await c.future;
+        }
         // A locked keychain does not error — it simply returns nothing, which
         // is indistinguishable from "no key" without the marker.
         if (locked) return null;
         return items[args['key'] as String];
       case 'write':
+        if (throwOnWrite) throw PlatformException(code: 'keychain');
         items[args['key'] as String] = args['value'] as String;
         writeOptions.add((args['options'] as Map?) ?? const {});
         return null;
@@ -97,7 +115,7 @@ void main() {
 
     // The user unlocks and opens the app.
     keychain.locked = false;
-    await relaunched.refreshKeyIfUnreadable();
+    await relaunched.refreshKeyOnResume();
     expect(relaunched.apiKey, 'sk-test');
     expect(relaunched.keyUnreadable, isFalse);
   });
@@ -153,5 +171,99 @@ void main() {
     // documented Samsung hang, and it has no business on every startup.
     await cfg.load();
     expect(keychain.writeOptions.length, 1);
+  });
+
+  test('a legacy key with no marker survives a LOCKED relaunch', () async {
+    // The population this whole fix exists for: a key saved by an older build,
+    // so there is no marker beside it, whose first launch on this build is a
+    // background relaunch on a locked phone. Concluding "no key" here and never
+    // retrying is exactly the old bug.
+    keychain.items['coach_api_key'] = 'sk-legacy';
+    keychain.locked = true;
+
+    final cfg = CoachConfig();
+    await cfg.load();
+    expect(cfg.hasKey, isFalse);
+    expect(cfg.keyUndetermined, isTrue,
+        reason: 'nothing is established yet, so the retry must stay armed');
+
+    keychain.locked = false;
+    await cfg.refreshKeyOnResume();
+    expect(cfg.apiKey, 'sk-legacy');
+  });
+
+  test('a legacy key whose read THROWS while locked still retries', () async {
+    // iOS reports a locked whenUnlocked item as an error rather than an empty
+    // read, which is the legacy item's actual behaviour before it is upgraded.
+    keychain.items['coach_api_key'] = 'sk-legacy';
+    keychain.throwOnRead = true;
+
+    final cfg = CoachConfig();
+    await cfg.load();
+    expect(cfg.keyUndetermined, isTrue);
+
+    keychain.throwOnRead = false;
+    await cfg.refreshKeyOnResume();
+    expect(cfg.apiKey, 'sk-legacy');
+  });
+
+  test('a foreground read settles "no key" so the retry stops', () async {
+    final cfg = CoachConfig();
+    await cfg.load(trusted: true);
+    expect(cfg.keyUndetermined, isFalse);
+    expect(cfg.hasKey, isFalse);
+  });
+
+  test('a marker outliving its item is cleared by a foreground read', () async {
+    // A device-to-device restore carries SharedPreferences across but not the
+    // keychain payload. Without this the app insists forever that a key it
+    // cannot produce is still saved, and Retry is the only thing on offer.
+    final cfg = CoachConfig();
+    await cfg.save(apiKey: 'sk-test');
+    keychain.items.clear(); // restored onto a new device
+
+    await cfg.load(trusted: true);
+    expect(cfg.keyUnreadable, isFalse);
+    expect(cfg.hasKey, isFalse, reason: 'it really is gone — offer setup');
+  });
+
+  test('a hung read leaves the retry armed rather than "no key"', () async {
+    final saved = CoachConfig();
+    await saved.save(apiKey: 'sk-test');
+
+    // A read that never returns (the Samsung Knox keystore hang the startup
+    // path is wrapped in a timeout for — a timeout that cannot cancel the call).
+    keychain.hangReads = true;
+    final relaunched = CoachConfig();
+    unawaited(relaunched.load());
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(relaunched.keyUnreadable, isTrue,
+        reason: 'the state must be pending BEFORE the read, not after it');
+  });
+
+  test('a save during an in-flight load is not clobbered by it', () async {
+    keychain.hangReads = true;
+    final cfg = CoachConfig();
+    unawaited(cfg.load());
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    keychain.hangReads = false;
+    await cfg.save(apiKey: 'sk-new', model: 'gpt-4o');
+    expect(cfg.apiKey, 'sk-new');
+
+    // The stale read finally lands, having started before the save.
+    keychain.releaseHung();
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(cfg.apiKey, 'sk-new',
+        reason: 'a read that predates the save must not apply its result');
+  });
+
+  test('a keychain that refuses the write does not report success', () async {
+    final cfg = CoachConfig();
+    keychain.throwOnWrite = true;
+    await expectLater(cfg.save(apiKey: 'sk-test'), throwsA(anything));
+    expect(cfg.hasKey, isFalse,
+        reason: 'memory must not hold a key that was never persisted');
   });
 }

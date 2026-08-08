@@ -218,32 +218,46 @@ Future<ResolvedNoopDatabase?> resolveNoopDatabase(String path) async {
     }
     if (db == null) return null; // not a backup — let the CSV path try.
 
-    final tempDir = await Directory.systemTemp.createTemp('openstrap_noopbak_');
-    final destPath = p.join(tempDir.path, p.basename(db.name));
-    final sink = OutputFileStream(destPath);
-    try {
-      db.writeContent(sink);
-    } finally {
-      await sink.close();
+    if (db.size > _kMaxUncompressedBytes) {
+      throw ImportFormatException(
+        '“${p.basename(path)}” unpacks to '
+        '${(db.size / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB, which is '
+        'not something we can import.',
+      );
     }
+    final tempDir = await Directory.systemTemp.createTemp('openstrap_noopbak_');
+    // Everything past this point owns `tempDir`. An IO failure here is a
+    // hundreds-of-megabytes partial copy, so nothing may escape without
+    // deleting it — the caller has no handle to clean up with, because the
+    // handle is what this function failed to return.
+    try {
+      final destPath = p.join(tempDir.path, p.basename(db.name));
+      final sink = OutputFileStream(destPath);
+      try {
+        db.writeContent(sink);
+      } finally {
+        await sink.close();
+      }
     // A 260 MB backup unpacks to a full second copy, and a phone that runs out
     // of space mid-write leaves a TRUNCATED file — which still opens as a valid
     // database and would import a fraction of the history as if that were all
     // of it. Silent partial history is the worst outcome here, so verify the
     // whole member landed. (Dart has no portable free-space API, hence checking
     // after rather than before.)
-    final written = await File(destPath).length();
-    if (db.size > 0 && written < db.size) {
-      final resolved = ResolvedNoopDatabase(destPath, tempDir);
-      await resolved.dispose();
-      throw ImportFormatException(
-        'Unpacking that backup stopped at '
-        '${(written / (1024 * 1024)).round()} MB of '
-        '${(db.size / (1024 * 1024)).round()} MB — the phone is probably out '
-        'of space. Free some up and try again.',
-      );
+      final written = await File(destPath).length();
+      if (db.size > 0 && written < db.size) {
+        throw ImportFormatException(
+          'Unpacking that backup stopped at '
+          '${(written / (1024 * 1024)).round()} MB of '
+          '${(db.size / (1024 * 1024)).round()} MB — the phone is probably out '
+          'of space. Free some up and try again.',
+        );
+      }
+      return ResolvedNoopDatabase(destPath, tempDir);
+    } catch (_) {
+      await ResolvedNoopDatabase('', tempDir).dispose();
+      rethrow;
     }
-    return ResolvedNoopDatabase(destPath, tempDir);
   } finally {
     await input.close();
   }

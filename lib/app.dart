@@ -79,7 +79,7 @@ class _OpenStrapAppState extends State<OpenStrapApp> with WidgetsBindingObserver
       // process. Coming to the foreground means the phone is unlocked — take
       // the chance to read it. No-op unless a key is known to exist and is
       // currently unreadable.
-      unawaited(context.read<CoachConfig>().refreshKeyIfUnreadable());
+      unawaited(context.read<CoachConfig>().refreshKeyOnResume());
       app.maybeFinishFromLiveActivity();
       unawaited(app.maybeStopBreathingFromLiveActivity());
       app.refreshAppStatus(); // re-check OTA + admin banner on every foreground

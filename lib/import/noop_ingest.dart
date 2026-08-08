@@ -86,6 +86,14 @@ class NoopIngest {
   /// in, so they are counted rather than silently dropped.
   int lateRows = 0;
 
+  /// Dates that arrived AFTER a later date had already opened, so they were
+  /// folded in as context but never derived in their own right. Non-empty means
+  /// the source was not time-ordered and those days are missing from the
+  /// import — surfaced rather than silently dropped.
+  final Set<String> _strandedDates = {};
+  Set<String> get strandedDates =>
+      Set.unmodifiable(_strandedDates.difference(_derived));
+
   /// Offer a sample at [ts] (epoch seconds). Returns false when the sample is
   /// too late to use — the caller must then skip it entirely.
   Future<bool> offer(int ts) async {
@@ -96,9 +104,28 @@ class NoopIngest {
         if (prev != null) {
           await _deriveAndPrune(prev);
           _derived.add(prev);
+          // The retained prior evening is only prior if it is ADJACENT. Across
+          // a gap — a band left in a drawer, two export ranges stitched
+          // together — the buffer would otherwise hand the next day a Substrate
+          // spanning the whole gap, and `calendarDays` walks that span a day at
+          // a time under a 400-iteration guard: past ~400 days it never reaches
+          // the target date, `deriveImportedDays` returns 0, and the day is
+          // silently missing from an import that reported success.
+          if (!_isDayAfter(prev, date)) {
+            _secs.clear();
+            _rrTs.clear();
+            _rrMs.clear();
+          }
         }
         _curDate = date;
+        _strandedDates.remove(date);
       case RowOrder.buffer:
+        // Older than the high-water date and not yet derived: usable as
+        // prior-evening context, but this date will never become the high-water
+        // date itself, so it never derives on its own and its samples are
+        // pruned once the current date does. Record it — a source that is not
+        // time-ordered loses whole days here, and the loss used to be silent.
+        if (date != _curDate) _strandedDates.add(date);
         break;
       case RowOrder.late:
         lateRows++;
@@ -111,7 +138,11 @@ class NoopIngest {
   void hr(int ts, int bpm) => (_secs[ts] ??= _Sec()).hr = bpm;
 
   void rr(int ts, double ms) {
-    if (ms <= 0) return;
+    // `!(ms > 0)`, NOT `ms <= 0` — those differ for NaN, which fails every
+    // comparison. A NaN beat propagates into the Substrate and poisons the whole
+    // day's HRV rather than being one bad interval, and the database path makes
+    // it reachable: a SQLite REAL column can hold one outright.
+    if (!(ms > 0)) return;
     _rrTs.add(ts * 1000.0);
     _rrMs.add(ms);
   }
@@ -143,7 +174,10 @@ class NoopIngest {
   /// never derived, and roll the import's day rollups forward.
   Future<void> finish() async {
     final last = _curDate;
-    if (last != null && _secs.isNotEmpty) {
+    // `_secs` OR the RR buffer: `rr()` is the one channel that creates no
+    // per-second entry, so a final date carrying only beats would otherwise be
+    // buffered and then dropped without ever deriving.
+    if (last != null && (_secs.isNotEmpty || _rrMs.isNotEmpty)) {
       final st = _stepsByDate.remove(last);
       if (st != null) steps += await flushStepCoverage(st, last);
       final sub = _buildSubstrate(_secs, _rrTs, _rrMs);
@@ -182,6 +216,16 @@ class NoopIngest {
     }
     _rrTs.length = w;
     _rrMs.length = w;
+  }
+
+  /// True when [next] is the calendar day immediately after [prev]. Built
+  /// through DateTime so a month, year or DST boundary is handled by the
+  /// calendar rather than by string arithmetic.
+  static bool _isDayAfter(String prev, String next) {
+    final p = DateTime.tryParse(prev), n = DateTime.tryParse(next);
+    if (p == null || n == null) return false;
+    final after = DateTime(p.year, p.month, p.day + 1);
+    return after.year == n.year && after.month == n.month && after.day == n.day;
   }
 
   /// String date compare 'YYYY-MM-DD' — true when [a] is strictly after [b].
@@ -228,11 +272,12 @@ class NoopIngest {
       final s = secs[t]!;
       tsSec[i] = t;
       hr[i] = s.hr ?? 0;
-      if (s.ax != null) {
-        fax = s.ax!;
-        fay = s.ay ?? fay;
-        faz = s.az ?? faz;
-      }
+      // Each axis carries on its own. Gating y and z behind x meant a row that
+      // reported only y or z left all three on the previous carry — silently
+      // wrong rather than merely incomplete.
+      if (s.ax != null) fax = s.ax!;
+      if (s.ay != null) fay = s.ay!;
+      if (s.az != null) faz = s.az!;
       ax[i] = fax;
       ay[i] = fay;
       az[i] = faz;

@@ -112,6 +112,14 @@ class _ImportScreenState extends State<ImportScreen> {
     if (paths.isEmpty) return;
     await _run('NOOP', () => app.importNoopCsv(paths.first,
         onProgress: (d) => _set(() => _progress = 'Re-deriving day $d…')));
+    final stranded = app.lastNoopImport?.strandedDates ?? const <String>{};
+    if (stranded.isNotEmpty && _error == null) {
+      final shown = (stranded.toList()..sort()).take(3).join(', ');
+      _set(() => _result = '${_result ?? ''} ${stranded.length} day'
+          '${stranded.length == 1 ? '' : 's'} came through out of order and '
+          'could not be re-analysed ($shown${stranded.length > 3 ? '…' : ''}).'
+          .trimLeft());
+    }
   }
 
   Future<void> _importEdge() async {
