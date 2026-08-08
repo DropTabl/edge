@@ -544,6 +544,48 @@ void main() {
     );
   }, timeout: const Timeout(Duration(minutes: 5)));
 
+  test('a timestamp with more rows than a page loses none to the drain',
+      () async {
+    // The drain pages an equal-timestamp group with OFFSET. Two queries whose
+    // ORDER BY is not a total order can hand back that group in different
+    // orders, and the offset then skips and repeats — silent duplicate beats
+    // in the append-only RR channel.
+    const t0 = 1786867200; // 2026-08-16
+    const beats = 25; // > the page size set below
+    final path = p.join(tmp.path, 'drain.sqlite');
+    if (File(path).existsSync()) File(path).deleteSync();
+    final src = await databaseFactory.openDatabase(path);
+    await src.execute('CREATE TABLE hrSample (deviceId TEXT, ts INTEGER, '
+        'bpm INTEGER, PRIMARY KEY (deviceId, ts))');
+    await src.execute('CREATE TABLE rrInterval (deviceId TEXT, ts INTEGER, '
+        'rrMs REAL, PRIMARY KEY (deviceId, ts, rrMs))');
+    final b = src.batch();
+    var expected = 0;
+    for (var i = 0; i < 60; i++) {
+      b.insert('hrSample', {'deviceId': 'd', 'ts': t0 + i, 'bpm': 64});
+      expected++;
+    }
+    // One second carrying far more beats than a page holds, inserted in a
+    // scrambled rrMs order so a naive tie order differs from insertion order.
+    for (var k = 0; k < beats; k++) {
+      final rr = 700.0 + ((k * 37) % beats);
+      b.insert('rrInterval', {'deviceId': 'd', 'ts': t0 + 30, 'rrMs': rr});
+      expected++;
+    }
+    await b.commit(noResult: true);
+    await src.close();
+    final bak = writeBackup('drain.noopbak', path);
+
+    final saved = kNoopBackupPageRows;
+    kNoopBackupPageRows = 8;
+    addTearDown(() => kNoopBackupPageRows = saved);
+
+    final res = await NoopImporter.importFile(
+        bak, const Profile(), DerivationEngine());
+    expect(res.rows, expected,
+        reason: 'every row read exactly once, drain included');
+  }, timeout: const Timeout(Duration(minutes: 5)));
+
   test('a backup with no samples says so rather than importing 0 days',
       () async {
     final path = p.join(tmp.path, 'empty.sqlite');

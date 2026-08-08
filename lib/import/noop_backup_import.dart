@@ -124,10 +124,17 @@ class NoopBackupImporter {
     // would throw a raw SQL error out of the span before the probe that exists
     // to skip it had run.
     final columns = <String, List<String>>{};
+    final ordered = <String, String>{};
     for (final e in _kTableCols.entries) {
       if (!tables.contains(e.key)) continue;
       final have = await _columnNames(src, e.key);
       columns[e.key] = [for (final c in e.value) if (have.contains(c)) c];
+      // `ORDER BY ts` is not a total order — `rrInterval` holds several beats
+      // per second — and the drain below pages an equal-timestamp group with
+      // OFFSET, which is only meaningful if both queries see the SAME order.
+      // `rowid` provides one for free on an ordinary table; a WITHOUT ROWID
+      // table has none, so probe rather than assume.
+      ordered[e.key] = await _hasRowid(src, e.key) ? 'ts, rowid' : 'ts';
     }
 
     // The spine has to be USABLE, not merely present. A `hrSample` with no
@@ -169,18 +176,18 @@ class NoopBackupImporter {
       // Order within a day does not matter — [NoopIngest] rebuilds the Substrate
       // sorted by timestamp — but the DAYS must arrive in ascending order, since
       // the high-water date is what closes out and derives the previous one.
-      await _read(src, tables, columns, 'hrSample', from, to, (r) async {
+      await _read(src, tables, columns, ordered, 'hrSample', from, to, (r) async {
         final ts = _int(r['ts']), v = _int(r['bpm']);
         if (ts == null || v == null) return;
         if (await ingest.offer(ts)) ingest.hr(ts, v);
       });
-      await _read(src, tables, columns, 'rrInterval', from, to,
+      await _read(src, tables, columns, ordered, 'rrInterval', from, to,
           (r) async {
         final ts = _int(r['ts']), v = _num(r['rrMs']);
         if (ts == null || v == null) return;
         if (await ingest.offer(ts)) ingest.rr(ts, v);
       });
-      await _read(src, tables, columns, 'gravitySample', from, to,
+      await _read(src, tables, columns, ordered, 'gravitySample', from, to,
           (r) async {
         final ts = _int(r['ts']);
         if (ts == null) return;
@@ -188,13 +195,13 @@ class NoopBackupImporter {
           ingest.gravity(ts, _num(r['x']), _num(r['y']), _num(r['z']));
         }
       });
-      await _read(src, tables, columns, 'skinTempSample', from, to,
+      await _read(src, tables, columns, ordered, 'skinTempSample', from, to,
           (r) async {
         final ts = _int(r['ts']);
         if (ts == null) return;
         if (await ingest.offer(ts)) ingest.skinTemp(ts, _int(r['raw']));
       });
-      await _read(src, tables, columns, 'spo2Sample', from, to,
+      await _read(src, tables, columns, ordered, 'spo2Sample', from, to,
           (r) async {
         final ts = _int(r['ts']);
         if (ts == null) return;
@@ -202,7 +209,7 @@ class NoopBackupImporter {
           ingest.spo2(ts, _int(r['red']), _int(r['ir']));
         }
       });
-      await _read(src, tables, columns, 'stepSample', from, to,
+      await _read(src, tables, columns, ordered, 'stepSample', from, to,
           (r) async {
         final ts = _int(r['ts']), v = _int(r['counter']);
         if (ts == null || v == null) return;
@@ -241,6 +248,7 @@ class NoopBackupImporter {
     Database src,
     Set<String> tables,
     Map<String, List<String>> columns,
+    Map<String, String> ordered,
     String table,
     int from,
     int to,
@@ -253,6 +261,7 @@ class NoopBackupImporter {
     if (!tables.contains(table)) return;
     final usable = columns[table] ?? const <String>[];
     if (usable.length < cols.length) return;
+    final orderBy = ordered[table] ?? 'ts';
 
     // `ts >= from` on the FIRST page, `ts > cursor` after. Not `ts > from - 1`:
     // that is only equivalent for integral timestamps, and against a fractional
@@ -268,7 +277,7 @@ class NoopBackupImporter {
         columns: cols,
         where: firstPage ? 'ts >= ? AND ts < ?' : 'ts > ? AND ts < ?',
         whereArgs: [cursor, to],
-        orderBy: 'ts',
+        orderBy: orderBy,
         limit: kNoopBackupPageRows,
       );
       firstPage = false;
@@ -301,7 +310,7 @@ class NoopBackupImporter {
             columns: cols,
             where: 'ts = ?',
             whereArgs: [lastTs],
-            orderBy: 'ts',
+            orderBy: orderBy,
             limit: kNoopBackupPageRows,
             offset: drained,
           );
@@ -358,6 +367,17 @@ class NoopBackupImporter {
       hi = hi == null || b > hi ? b : hi;
     }
     return (lo == null || hi == null) ? null : (lo, hi);
+  }
+
+  /// Does [table] have an implicit `rowid`? False for a WITHOUT ROWID table,
+  /// where selecting it is an error rather than an empty result.
+  static Future<bool> _hasRowid(Database src, String table) async {
+    try {
+      await src.rawQuery('SELECT rowid FROM $table LIMIT 1');
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<Set<String>> _columnNames(Database src, String table) async {
