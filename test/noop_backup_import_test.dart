@@ -487,6 +487,63 @@ void main() {
         reason: 'the drifted table is skipped, the rest still imports');
   }, timeout: const Timeout(Duration(minutes: 5)));
 
+  test('an optional table with no ts column does not break the span', () async {
+    // `_span` selects MIN(ts)/MAX(ts). Running it before the column probe threw
+    // a raw SQL error out of a table the probe exists to skip.
+    const t0 = 1786694400; // 2026-08-14
+    final path = p.join(tmp.path, 'nots.sqlite');
+    if (File(path).existsSync()) File(path).deleteSync();
+    final src = await databaseFactory.openDatabase(path);
+    await src.execute('CREATE TABLE hrSample (deviceId TEXT, ts INTEGER, '
+        'bpm INTEGER, PRIMARY KEY (deviceId, ts))');
+    // Drifted beyond recognition: no `ts` at all.
+    await src.execute('CREATE TABLE spo2Sample (deviceId TEXT, '
+        'recordedAt INTEGER, red INTEGER, ir INTEGER)');
+    await src.insert('spo2Sample',
+        {'deviceId': 'd', 'recordedAt': t0, 'red': 1, 'ir': 2});
+    final b = src.batch();
+    for (var i = 0; i < 300; i++) {
+      b.insert('hrSample', {'deviceId': 'd', 'ts': t0 + i, 'bpm': 63});
+    }
+    await b.commit(noResult: true);
+    await src.close();
+    final bak = writeBackup('nots.noopbak', path);
+
+    final res = await NoopImporter.importFile(
+        bak, const Profile(), DerivationEngine());
+    expect(res.days, greaterThan(0));
+    expect(res.rows, 300);
+  }, timeout: const Timeout(Duration(minutes: 5)));
+
+  test('an hrSample without bpm is refused, not quietly imported', () async {
+    // The table-name check passes, then every read skips it — the remaining
+    // channels would carry the import to a plausible day count with no heart
+    // rate anywhere in it.
+    const t0 = 1786780800; // 2026-08-15
+    final path = p.join(tmp.path, 'nobpm.sqlite');
+    if (File(path).existsSync()) File(path).deleteSync();
+    final src = await databaseFactory.openDatabase(path);
+    await src.execute('CREATE TABLE hrSample (deviceId TEXT, ts INTEGER, '
+        'heartRate INTEGER, PRIMARY KEY (deviceId, ts))');
+    await src.execute('CREATE TABLE gravitySample (deviceId TEXT, ts INTEGER, '
+        'x DOUBLE, y DOUBLE, z DOUBLE, PRIMARY KEY (deviceId, ts))');
+    final b = src.batch();
+    for (var i = 0; i < 300; i++) {
+      b.insert('hrSample', {'deviceId': 'd', 'ts': t0 + i, 'heartRate': 63});
+      b.insert('gravitySample',
+          {'deviceId': 'd', 'ts': t0 + i, 'x': 0.1, 'y': 0.2, 'z': 0.97});
+    }
+    await b.commit(noResult: true);
+    await src.close();
+    final bak = writeBackup('nobpm.noopbak', path);
+
+    await expectLater(
+      NoopImporter.importFile(bak, const Profile(), DerivationEngine()),
+      throwsA(isA<ImportFormatException>()
+          .having((e) => e.message, 'message', contains('heart rate'))),
+    );
+  }, timeout: const Timeout(Duration(minutes: 5)));
+
   test('a backup with no samples says so rather than importing 0 days',
       () async {
     final path = p.join(tmp.path, 'empty.sqlite');

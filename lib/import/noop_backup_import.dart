@@ -117,26 +117,43 @@ class NoopBackupImporter {
       );
     }
 
-    final span = await _span(src, tables);
-    if (span == null) {
-      throw const ImportFormatException(
-        'That NOOP backup holds no samples — there is nothing to import.',
-      );
-    }
-    final (minTs, maxTs) = span;
-
-    // Probe every table's columns ONCE. The schema cannot change during a
-    // read-only import, and doing it inside the day walk cost a
-    // `PRAGMA table_info` per table per day — thousands of pointless queries on
-    // a long backup. A table whose columns have drifted resolves to a short
-    // list here and is skipped by `_read`, rather than failing mid-import with
-    // a raw `no such column` after days have already been written.
+    // Probe every table's columns ONCE, and do it BEFORE anything queries them.
+    // The schema cannot change during a read-only import, and probing inside
+    // the day walk cost a `PRAGMA table_info` per table per day. Order matters:
+    // `_span` selects MIN(ts)/MAX(ts), so a drifted table with no `ts` at all
+    // would throw a raw SQL error out of the span before the probe that exists
+    // to skip it had run.
     final columns = <String, List<String>>{};
     for (final e in _kTableCols.entries) {
       if (!tables.contains(e.key)) continue;
       final have = await _columnNames(src, e.key);
       columns[e.key] = [for (final c in e.value) if (have.contains(c)) c];
     }
+
+    // The spine has to be USABLE, not merely present. A `hrSample` with no
+    // `bpm` clears the table-name check above and is then silently skipped by
+    // every read — the other channels would carry the import to a plausible day
+    // count with no heart rate in any of it.
+    if ((columns['hrSample'] ?? const []).length <
+        _kTableCols['hrSample']!.length) {
+      throw const ImportFormatException(
+        'That database has an `hrSample` table without the columns we read '
+        '(`ts`, `bpm`), so there is no heart rate to import.',
+      );
+    }
+
+    // Only tables we can actually read contribute to the span.
+    final readable = {
+      for (final e in columns.entries)
+        if (e.value.length == (_kTableCols[e.key]?.length ?? -1)) e.key,
+    };
+    final span = await _span(src, readable);
+    if (span == null) {
+      throw const ImportFormatException(
+        'That NOOP backup holds no samples — there is nothing to import.',
+      );
+    }
+    final (minTs, maxTs) = span;
 
     final ingest = NoopIngest(profile, engine, onProgress: onProgress);
 
