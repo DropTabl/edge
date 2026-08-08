@@ -138,11 +138,12 @@ class NoopIngest {
   void hr(int ts, int bpm) => (_secs[ts] ??= _Sec()).hr = bpm;
 
   void rr(int ts, double ms) {
-    // `!(ms > 0)`, NOT `ms <= 0` — those differ for NaN, which fails every
-    // comparison. A NaN beat propagates into the Substrate and poisons the whole
-    // day's HRV rather than being one bad interval, and the database path makes
-    // it reachable: a SQLite REAL column can hold one outright.
-    if (!(ms > 0)) return;
+    // FINITE and positive. `ms <= 0` alone lets NaN through (it fails every
+    // comparison) and `!(ms > 0)` alone lets infinity through; either one
+    // propagates into the Substrate and poisons the whole day's HRV rather than
+    // costing a single interval. Both are reachable: a CSV column can spell
+    // `NaN`, and a SQLite REAL can hold either outright.
+    if (!ms.isFinite || ms <= 0) return;
     _rrTs.add(ts * 1000.0);
     _rrMs.add(ms);
   }

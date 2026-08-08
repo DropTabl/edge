@@ -106,8 +106,10 @@ class _CoachSettingsScreenState extends State<CoachSettingsScreen> {
     if (!mounted) return;
     messenger.showSnackBar(
       SnackBar(
+        // Neutral on purpose: `blindClear` is also true when there is no key at
+        // all, and claiming an existing one was preserved would be a fiction.
         content: Text(blindClear
-            ? 'Settings saved. Your existing key was left untouched.'
+            ? 'Settings saved. Your API key was not changed.'
             : 'AI Coach settings saved.'),
       ),
     );

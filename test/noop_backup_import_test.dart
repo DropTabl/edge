@@ -240,10 +240,12 @@ void main() {
         reason: 'every HR sample and every RR beat was read');
   }, timeout: const Timeout(Duration(minutes: 5)));
 
-  test('a NaN interval never reaches the substrate', () async {
-    // A REAL column can hold NaN, and NaN fails every comparison — so a
-    // `ms <= 0` guard passes it through. One NaN beat poisons the day's whole
-    // HRV computation rather than costing one interval.
+  test('a non-finite interval from the database is not a beat', () async {
+    // sqflite returns NULL for a NaN REAL, so `_num` already drops it before
+    // the guard — but INFINITY comes back as a real double and reaches `rr()`.
+    // (The NaN path proper is exercised through the CSV importer, where
+    // `double.tryParse('NaN')` genuinely produces one — see
+    // noop_schema_drift_test.dart.)
     const t0 = 1785919200; // 2026-08-05
     final path = p.join(tmp.path, 'nan.sqlite');
     if (File(path).existsSync()) File(path).deleteSync();
@@ -258,7 +260,7 @@ void main() {
       b.insert('rrInterval', {
         'deviceId': 'd',
         'ts': t0 + i,
-        'rrMs': i == 60 ? double.nan : 900.0,
+        'rrMs': i == 60 ? double.infinity : 900.0,
       });
     }
     await b.commit(noResult: true);
@@ -269,11 +271,10 @@ void main() {
         bak, const Profile(), DerivationEngine());
     expect(res.days, greaterThan(0), reason: 'the day still imports');
 
-    // Whatever the day computed, it must not be NaN-poisoned.
     final db = await LocalDb.instance;
     final rows = await db.query('day_result');
     for (final r in rows) {
-      expect(r.values.whereType<double>().where((v) => v.isNaN), isEmpty);
+      expect(r.values.whereType<double>().where((v) => !v.isFinite), isEmpty);
     }
   }, timeout: const Timeout(Duration(minutes: 5)));
 
@@ -374,8 +375,11 @@ void main() {
 
     final res = await NoopImporter.importFile(
         bak, const Profile(), DerivationEngine());
-    expect(res.rows, lessThanOrEqualTo(n),
-        reason: 'rows are never emitted twice');
+    // EXACT: `lessThanOrEqualTo` would pass on an importer that read one row.
+    // Duplication and loss are both real failure modes here — the fallback path
+    // drains a whole second rather than stepping past it precisely so that the
+    // count can be exact.
+    expect(res.rows, n);
   }, timeout: const Timeout(Duration(minutes: 2)));
 
   test('a renamed column is a message, not a raw SQL error mid-import',

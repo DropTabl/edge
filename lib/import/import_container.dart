@@ -244,6 +244,11 @@ Future<ResolvedNoopDatabase?> resolveNoopDatabase(String path) async {
     // of it. Silent partial history is the worst outcome here, so verify the
     // whole member landed. (Dart has no portable free-space API, hence checking
     // after rather than before.)
+      // The size is checked in BOTH directions. Short means the write ran out
+      // of space, and a truncated database still opens — importing a fraction
+      // of someone's history as if it were all of it. Long means the archive's
+      // declared size is not what it actually holds, which is the only thing
+      // the ceiling above was checked against, so the ceiling did not hold.
       final written = await File(destPath).length();
       if (db.size > 0 && written < db.size) {
         throw ImportFormatException(
@@ -253,9 +258,23 @@ Future<ResolvedNoopDatabase?> resolveNoopDatabase(String path) async {
           'of space. Free some up and try again.',
         );
       }
+      if (db.size > 0 && written > db.size) {
+        throw ImportFormatException(
+          '“${p.basename(path)}” does not hold what it says it does — its '
+          'database unpacked to more than the archive declared. It is likely '
+          'damaged; export it again.',
+        );
+      }
       return ResolvedNoopDatabase(destPath, tempDir);
     } catch (_) {
-      await ResolvedNoopDatabase('', tempDir).dispose();
+      // Delete the partial copy directly, and never let a cleanup failure
+      // replace the real exception — the out-of-space message above is the one
+      // the user can act on.
+      try {
+        if (tempDir.existsSync()) await tempDir.delete(recursive: true);
+      } catch (_) {
+        /* the OS reclaims the temp dir eventually */
+      }
       rethrow;
     }
   } finally {

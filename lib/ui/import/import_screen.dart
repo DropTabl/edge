@@ -30,6 +30,12 @@ class _ImportScreenState extends State<ImportScreen> {
   bool _picking = false;
   String? _progress;
   String? _result;
+
+  /// A partial success — the import worked but cost something the user needs to
+  /// know about. Distinct from [_result] and [_error] because it is neither: a
+  /// green tick beside "these days could not be re-analysed" reads as approval
+  /// of the loss, and an error card would claim the whole import failed.
+  String? _warning;
   String? _error;
 
   /// The option cards are inert while EITHER a picker is open or an import is
@@ -88,6 +94,7 @@ class _ImportScreenState extends State<ImportScreen> {
       _busy = true;
       _progress = 'Importing…';
       _result = null;
+      _warning = null;
       _error = null;
     });
     try {
@@ -115,10 +122,9 @@ class _ImportScreenState extends State<ImportScreen> {
     final stranded = app.lastNoopImport?.strandedDates ?? const <String>{};
     if (stranded.isNotEmpty && _error == null) {
       final shown = (stranded.toList()..sort()).take(3).join(', ');
-      _set(() => _result = '${_result ?? ''} ${stranded.length} day'
+      _set(() => _warning = '${stranded.length} day'
           '${stranded.length == 1 ? '' : 's'} came through out of order and '
-          'could not be re-analysed ($shown${stranded.length > 3 ? '…' : ''}).'
-          .trimLeft());
+          'could not be re-analysed ($shown${stranded.length > 3 ? '…' : ''}).');
     }
   }
 
@@ -219,6 +225,21 @@ class _ImportScreenState extends State<ImportScreen> {
                       Text(_progress ?? 'Importing…', style: AppText.bodySoft)),
             ]),
           ),
+        if (_warning != null) ...[
+          SurfaceCard(
+            level: 0,
+            color: AppColors.warnSoft,
+            padding: const EdgeInsets.all(Sp.x4),
+            child: Row(children: [
+              AppIcon(OsIcon.info, size: 18, color: AppColors.warn),
+              const SizedBox(width: Sp.x3),
+              Expanded(
+                  child: Text(_warning!,
+                      style: AppText.body.copyWith(color: AppColors.warn))),
+            ]),
+          ).dsPop(),
+          const SizedBox(height: Sp.x3),
+        ],
         if (_result != null) ...[
           SurfaceCard(
             level: 0,

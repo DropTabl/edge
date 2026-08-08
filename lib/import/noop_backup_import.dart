@@ -110,6 +110,26 @@ class NoopBackupImporter {
     }
     final (minTs, maxTs) = span;
 
+    // Probe every table's columns ONCE. The schema cannot change during a
+    // read-only import, and doing it inside the day walk cost a
+    // `PRAGMA table_info` per table per day — thousands of pointless queries on
+    // a long backup. A table whose columns have drifted resolves to a short
+    // list here and is skipped by `_read`, rather than failing mid-import with
+    // a raw `no such column` after days have already been written.
+    final columns = <String, List<String>>{};
+    for (final e in const {
+      'hrSample': ['ts', 'bpm'],
+      'rrInterval': ['ts', 'rrMs'],
+      'gravitySample': ['ts', 'x', 'y', 'z'],
+      'skinTempSample': ['ts', 'raw'],
+      'spo2Sample': ['ts', 'red', 'ir'],
+      'stepSample': ['ts', 'counter'],
+    }.entries) {
+      if (!tables.contains(e.key)) continue;
+      final have = await _columnNames(src, e.key);
+      columns[e.key] = [for (final c in e.value) if (have.contains(c)) c];
+    }
+
     final ingest = NoopIngest(profile, engine, onProgress: onProgress);
 
     // Walk LOCAL days. Built through the DateTime(y, m, d + 1) constructor
@@ -124,18 +144,18 @@ class NoopBackupImporter {
       // Order within a day does not matter — [NoopIngest] rebuilds the Substrate
       // sorted by timestamp — but the DAYS must arrive in ascending order, since
       // the high-water date is what closes out and derives the previous one.
-      await _read(src, tables, 'hrSample', ['ts', 'bpm'], from, to, (r) async {
+      await _read(src, tables, columns, 'hrSample', ['ts', 'bpm'], from, to, (r) async {
         final ts = _int(r['ts']), v = _int(r['bpm']);
         if (ts == null || v == null) return;
         if (await ingest.offer(ts)) ingest.hr(ts, v);
       });
-      await _read(src, tables, 'rrInterval', ['ts', 'rrMs'], from, to,
+      await _read(src, tables, columns, 'rrInterval', ['ts', 'rrMs'], from, to,
           (r) async {
         final ts = _int(r['ts']), v = _num(r['rrMs']);
         if (ts == null || v == null) return;
         if (await ingest.offer(ts)) ingest.rr(ts, v);
       });
-      await _read(src, tables, 'gravitySample', ['ts', 'x', 'y', 'z'], from, to,
+      await _read(src, tables, columns, 'gravitySample', ['ts', 'x', 'y', 'z'], from, to,
           (r) async {
         final ts = _int(r['ts']);
         if (ts == null) return;
@@ -143,13 +163,13 @@ class NoopBackupImporter {
           ingest.gravity(ts, _num(r['x']), _num(r['y']), _num(r['z']));
         }
       });
-      await _read(src, tables, 'skinTempSample', ['ts', 'raw'], from, to,
+      await _read(src, tables, columns, 'skinTempSample', ['ts', 'raw'], from, to,
           (r) async {
         final ts = _int(r['ts']);
         if (ts == null) return;
         if (await ingest.offer(ts)) ingest.skinTemp(ts, _int(r['raw']));
       });
-      await _read(src, tables, 'spo2Sample', ['ts', 'red', 'ir'], from, to,
+      await _read(src, tables, columns, 'spo2Sample', ['ts', 'red', 'ir'], from, to,
           (r) async {
         final ts = _int(r['ts']);
         if (ts == null) return;
@@ -157,7 +177,7 @@ class NoopBackupImporter {
           ingest.spo2(ts, _int(r['red']), _int(r['ir']));
         }
       });
-      await _read(src, tables, 'stepSample', ['ts', 'counter'], from, to,
+      await _read(src, tables, columns, 'stepSample', ['ts', 'counter'], from, to,
           (r) async {
         final ts = _int(r['ts']), v = _int(r['counter']);
         if (ts == null || v == null) return;
@@ -178,21 +198,24 @@ class NoopBackupImporter {
   }
 
   /// Page one table's rows for the half-open window [from, to) into [onRow].
-  /// A table the backup does not have is skipped — `spo2Sample` and `respSample`
-  /// are already absent-in-practice (present but empty), and a future NOOP
-  /// schema is free to drop either outright.
+  /// A table the backup does not have — or one whose columns have drifted — is
+  /// skipped rather than failing the import mid-way.
   ///
   /// Paged by KEYSET (`ts > last`), not OFFSET: LIMIT/OFFSET re-walks and
-  /// re-discards every skipped row, so paging a 86,400-row day turns quadratic.
+  /// re-discards every skipped row, so paging an 86,400-row day turns quadratic.
   ///
-  /// `ts` is NOT unique in every table — `rrInterval`'s key is (deviceId, ts,
-  /// rrMs), so one second can hold several beats, and two devices can share a
-  /// second in any table. A page boundary landing inside such a second would
-  /// drop its remaining rows silently, so a FULL page discards its trailing
-  /// partial second and re-reads it from the top of the next page.
+  /// The cursor is the RAW column value, never a truncated second. `ts` is not
+  /// unique — `rrInterval`'s key is (deviceId, ts, rrMs), so one second holds
+  /// several beats — so a page boundary can land inside a timestamp, and the
+  /// trailing rows sharing it are held back and re-read whole on the next page.
+  /// Keying that cursor on `ts` truncated to an int looks equivalent and is not:
+  /// against a REAL column (a GRDB `Date` is stored as one) `ts > 3.0` does not
+  /// exclude `3.2`, so the same rows come back forever — or, with a guard
+  /// against that, the read stops early and silently drops the rest of the day.
   static Future<void> _read(
     Database src,
     Set<String> tables,
+    Map<String, List<String>> columns,
     String table,
     List<String> cols,
     int from,
@@ -200,15 +223,10 @@ class NoopBackupImporter {
     Future<void> Function(Map<String, Object?> row) onRow,
   ) async {
     if (!tables.contains(table)) return;
-    // The COLUMNS are probed too, not just the table. `spo2Sample` is the one
-    // table documented as never seen non-empty, i.e. the one whose column names
-    // are least confirmed — and a rename would surface as a raw
-    // `no such column` SQL error mid-import, after days had already been
-    // written, with `finish()` never reached to roll the rollups forward.
-    final have = await _columnNames(src, table);
-    final usable = [for (final c in cols) if (have.contains(c)) c];
-    if (!usable.contains('ts') || usable.length < cols.length) return;
-    var cursor = from - 1;
+    final usable = columns[table] ?? const <String>[];
+    if (usable.length < cols.length) return;
+
+    num cursor = from - 1;
     while (true) {
       final rows = await src.query(
         table,
@@ -220,46 +238,58 @@ class NoopBackupImporter {
       );
       if (rows.isEmpty) return;
       final full = rows.length == kNoopBackupPageRows;
-      final lastTs = _int(rows.last['ts']);
-      // A NULL or non-integer ts in the last row of a page would leave the
-      // cursor unmoved and loop forever; take the page and stop instead.
-      if (lastTs == null || lastTs <= cursor) {
+
+      // Hold back the trailing rows that share the last timestamp EXACTLY; the
+      // next page re-reads that timestamp whole.
+      var end = rows.length;
+      if (full) {
+        final lastTs = _raw(rows.last['ts']);
+        while (end > 0 && _raw(rows[end - 1]['ts']) == lastTs) {
+          end--;
+        }
+      }
+      // A whole page sharing one timestamp cannot hold anything back without
+      // stalling. Take it, then drain whatever else carries that exact value
+      // before stepping past it — stepping past directly would silently lose
+      // the remainder, which is the partial-history failure this file refuses
+      // everywhere else. Offset-paged, but bounded to one timestamp's rows.
+      if (end == 0) {
+        final lastTs = _raw(rows.last['ts']);
         for (final r in rows) {
           await onRow(r);
         }
-        return;
+        var drained = rows.length;
+        while (lastTs != null) {
+          final more = await src.query(
+            table,
+            columns: cols,
+            where: 'ts = ?',
+            whereArgs: [lastTs],
+            orderBy: 'ts',
+            limit: kNoopBackupPageRows,
+            offset: drained,
+          );
+          if (more.isEmpty) break;
+          for (final r in more) {
+            await onRow(r);
+          }
+          drained += more.length;
+          if (more.length < kNoopBackupPageRows) break;
+        }
+        if (lastTs == null) return; // a NULL ts cannot be paged past
+        cursor = lastTs;
+        continue;
       }
 
-      // On a full page, hold back the trailing rows that share the last
-      // timestamp — the next page re-reads that second whole.
-      var end = rows.length;
-      if (full) {
-        while (end > 0 && _int(rows[end - 1]['ts']) == lastTs) {
-          end--;
-        }
-        // A whole page of one timestamp: nothing can be held back without
-        // stalling, so take it and step past that second.
-        if (end == 0) end = rows.length;
-      }
       for (var i = 0; i < end; i++) {
         await onRow(rows[i]);
       }
       if (!full) return;
-      final next = end == rows.length ? lastTs : lastTs - 1;
-      if (next > cursor) {
-        cursor = next;
-        continue;
-      }
-      // No progress. Reachable only if `ts` is a REAL column whose values
-      // truncate onto the same second (a GRDB `Date` is stored that way), where
-      // holding back the trailing second leaves the cursor exactly where it
-      // was. Looping would hang the import outright, and re-reading the page
-      // would append every RR beat in it a second time — so take the whole page
-      // and step past that second.
-      for (var i = end; i < rows.length; i++) {
-        await onRow(rows[i]);
-      }
-      cursor = lastTs;
+      // The cursor is the last row actually EMITTED, so nothing is skipped and
+      // the next page starts strictly after it.
+      final next = _raw(rows[end - 1]['ts']);
+      if (next == null || next <= cursor) return; // non-numeric ts: stop
+      cursor = next;
     }
   }
 
@@ -317,4 +347,8 @@ class NoopBackupImporter {
           : null;
 
   static double? _num(Object? v) => v is num ? v.toDouble() : null;
+
+  /// The timestamp column's value as stored — INTEGER in every NOOP schema seen
+  /// so far, but REAL is representable and must page correctly either way.
+  static num? _raw(Object? v) => v is num ? v : null;
 }

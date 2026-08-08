@@ -298,6 +298,37 @@ void main() {
       expect(res.days, greaterThan(0));
     }, timeout: const Timeout(Duration(minutes: 5)));
 
+    test('an rr_ms of NaN or Infinity is not a beat', () async {
+      // `double.tryParse('NaN')` really does return NaN, and NaN fails every
+      // comparison — so a `ms <= 0` guard passes it straight into the
+      // Substrate, where one bad beat poisons the whole day's HRV.
+      const t0 = 1786262400; // 2026-08-09
+      final b = StringBuffer()..writeln(_header);
+      for (var i = 0; i < 600; i++) {
+        final ts = t0 + i;
+        b.writeln(_row(ts, 'hr', hr: '${60 + (i % 10)}'));
+        b.writeln(_row(ts, 'gravity', gx: '0.1', gy: '0.2', gz: '0.97'));
+        b.writeln(_row(ts, 'rr',
+            rr: i == 100
+                ? 'NaN'
+                : i == 200
+                    ? 'Infinity'
+                    : '900'));
+      }
+      final f = File(p.join(tmp.path, 'nan.csv'))
+        ..writeAsStringSync(b.toString());
+
+      final res = await NoopImporter.importFile(
+          f.path, const Profile(), DerivationEngine());
+      expect(res.days, greaterThan(0));
+
+      final db = await LocalDb.instance;
+      for (final r in await db.query('day_result')) {
+        expect(r.values.whereType<double>().where((v) => !v.isFinite), isEmpty,
+            reason: 'a non-finite beat must never reach a stored metric');
+      }
+    }, timeout: const Timeout(Duration(minutes: 5)));
+
     test('an UNKNOWN future stream is skipped, not fatal', () async {
       const t0 = 1785747600;
       final b = StringBuffer()..writeln(_header);
