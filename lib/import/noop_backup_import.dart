@@ -56,6 +56,21 @@ int kNoopBackupPageRows = 20000;
 const int _kMinPlausibleTs = 1000000000; // 2001-09-09
 const int _kMaxPlausibleTs = 4102444800; // 2100-01-01
 
+/// Every table read, and the columns wanted from it. ONE definition: the probe
+/// and the reads both key off this, so a name can no longer be spelled one way
+/// here and another at a call site. That typo was silent — a mistyped table
+/// simply produced an empty column list, the read skipped it, and every gravity
+/// or skin-temperature sample vanished from the import with no error and a
+/// still-positive day count.
+const Map<String, List<String>> _kTableCols = {
+  'hrSample': ['ts', 'bpm'],
+  'rrInterval': ['ts', 'rrMs'],
+  'gravitySample': ['ts', 'x', 'y', 'z'],
+  'skinTempSample': ['ts', 'raw'],
+  'spo2Sample': ['ts', 'red', 'ir'],
+  'stepSample': ['ts', 'counter'],
+};
+
 class NoopBackupImporter {
   /// Import an already-extracted `noop-backup.sqlite` at [path].
   ///
@@ -117,14 +132,7 @@ class NoopBackupImporter {
     // list here and is skipped by `_read`, rather than failing mid-import with
     // a raw `no such column` after days have already been written.
     final columns = <String, List<String>>{};
-    for (final e in const {
-      'hrSample': ['ts', 'bpm'],
-      'rrInterval': ['ts', 'rrMs'],
-      'gravitySample': ['ts', 'x', 'y', 'z'],
-      'skinTempSample': ['ts', 'raw'],
-      'spo2Sample': ['ts', 'red', 'ir'],
-      'stepSample': ['ts', 'counter'],
-    }.entries) {
+    for (final e in _kTableCols.entries) {
       if (!tables.contains(e.key)) continue;
       final have = await _columnNames(src, e.key);
       columns[e.key] = [for (final c in e.value) if (have.contains(c)) c];
@@ -144,18 +152,18 @@ class NoopBackupImporter {
       // Order within a day does not matter — [NoopIngest] rebuilds the Substrate
       // sorted by timestamp — but the DAYS must arrive in ascending order, since
       // the high-water date is what closes out and derives the previous one.
-      await _read(src, tables, columns, 'hrSample', ['ts', 'bpm'], from, to, (r) async {
+      await _read(src, tables, columns, 'hrSample', from, to, (r) async {
         final ts = _int(r['ts']), v = _int(r['bpm']);
         if (ts == null || v == null) return;
         if (await ingest.offer(ts)) ingest.hr(ts, v);
       });
-      await _read(src, tables, columns, 'rrInterval', ['ts', 'rrMs'], from, to,
+      await _read(src, tables, columns, 'rrInterval', from, to,
           (r) async {
         final ts = _int(r['ts']), v = _num(r['rrMs']);
         if (ts == null || v == null) return;
         if (await ingest.offer(ts)) ingest.rr(ts, v);
       });
-      await _read(src, tables, columns, 'gravitySample', ['ts', 'x', 'y', 'z'], from, to,
+      await _read(src, tables, columns, 'gravitySample', from, to,
           (r) async {
         final ts = _int(r['ts']);
         if (ts == null) return;
@@ -163,13 +171,13 @@ class NoopBackupImporter {
           ingest.gravity(ts, _num(r['x']), _num(r['y']), _num(r['z']));
         }
       });
-      await _read(src, tables, columns, 'skinTempSample', ['ts', 'raw'], from, to,
+      await _read(src, tables, columns, 'skinTempSample', from, to,
           (r) async {
         final ts = _int(r['ts']);
         if (ts == null) return;
         if (await ingest.offer(ts)) ingest.skinTemp(ts, _int(r['raw']));
       });
-      await _read(src, tables, columns, 'spo2Sample', ['ts', 'red', 'ir'], from, to,
+      await _read(src, tables, columns, 'spo2Sample', from, to,
           (r) async {
         final ts = _int(r['ts']);
         if (ts == null) return;
@@ -177,7 +185,7 @@ class NoopBackupImporter {
           ingest.spo2(ts, _int(r['red']), _int(r['ir']));
         }
       });
-      await _read(src, tables, columns, 'stepSample', ['ts', 'counter'], from, to,
+      await _read(src, tables, columns, 'stepSample', from, to,
           (r) async {
         final ts = _int(r['ts']), v = _int(r['counter']);
         if (ts == null || v == null) return;
@@ -217,25 +225,36 @@ class NoopBackupImporter {
     Set<String> tables,
     Map<String, List<String>> columns,
     String table,
-    List<String> cols,
     int from,
     int to,
     Future<void> Function(Map<String, Object?> row) onRow,
   ) async {
+    // A table name with no entry is a programming error, not a schema
+    // variation — fail loudly here rather than silently importing without that
+    // channel.
+    final cols = _kTableCols[table]!;
     if (!tables.contains(table)) return;
     final usable = columns[table] ?? const <String>[];
     if (usable.length < cols.length) return;
 
-    num cursor = from - 1;
+    // `ts >= from` on the FIRST page, `ts > cursor` after. Not `ts > from - 1`:
+    // that is only equivalent for integral timestamps, and against a fractional
+    // one it makes the open interval (to-1, to) belong to BOTH the day that
+    // ends at `to` and the day that starts there. The straddling rows are then
+    // read twice, and while the map-keyed channels absorb that, `rr()` APPENDS —
+    // a duplicated beat corrupts the night's RMSSD rather than costing a row.
+    num cursor = from;
+    var firstPage = true;
     while (true) {
       final rows = await src.query(
         table,
         columns: cols,
-        where: 'ts > ? AND ts < ?',
+        where: firstPage ? 'ts >= ? AND ts < ?' : 'ts > ? AND ts < ?',
         whereArgs: [cursor, to],
         orderBy: 'ts',
         limit: kNoopBackupPageRows,
       );
+      firstPage = false;
       if (rows.isEmpty) return;
       final full = rows.length == kNoopBackupPageRows;
 

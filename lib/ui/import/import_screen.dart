@@ -77,11 +77,19 @@ class _ImportScreenState extends State<ImportScreen> {
       // still up and will deliver the user's choice, so say nothing. Anything
       // else is worth showing.
       if (e.code != 'already_active') {
-        _set(() => _error = 'Could not open the file picker: ${e.message ?? e.code}');
+        _set(() {
+          _error = 'Could not open the file picker: ${e.message ?? e.code}';
+          _result = null;
+          _warning = null;
+        });
       }
       return const [];
     } catch (e) {
-      _set(() => _error = 'Could not open the file picker: $e');
+      _set(() {
+        _error = 'Could not open the file picker: $e';
+        _result = null;
+        _warning = null;
+      });
       return const [];
     } finally {
       _set(() => _picking = false);
@@ -264,7 +272,17 @@ class _ImportScreenState extends State<ImportScreen> {
           const SizedBox(height: Sp.x2),
           Center(
             child: TextButton(
-              onPressed: _busy ? null : () => _set(() => _result = null),
+              onPressed: _busy
+                  ? null
+                  // The warning is cleared WITH the result: they describe the
+                  // same import, and clearing only one left an orphaned
+                  // "days could not be re-analysed" card with no way to dismiss
+                  // it — the button that would have dismissed it disappears
+                  // along with the result card.
+                  : () => _set(() {
+                        _result = null;
+                        _warning = null;
+                      }),
               child: const Text('Import another file'),
             ),
           ),

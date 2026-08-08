@@ -7,6 +7,7 @@
 // empty `spo2Sample`/`respSample` tables, and a deviceId that differs between
 // the sample tables ("my-whoop") and `sleepSession` ("my-whoop-noop").
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:archive/archive.dart';
@@ -19,6 +20,38 @@ import 'package:openstrap_edge/data/db.dart';
 import 'package:openstrap_edge/import/import_container.dart';
 import 'package:openstrap_edge/import/noop_backup_import.dart';
 import 'package:openstrap_edge/import/noop_import.dart';
+
+/// 'YYYY-MM-DD' for an epoch second, in the LOCAL zone — the same day key the
+/// importer writes, so an assertion can scope itself to its own fixture.
+String _localDay(int epochSec) {
+  final d = DateTime.fromMillisecondsSinceEpoch(epochSec * 1000);
+  return '${d.year.toString().padLeft(4, '0')}-'
+      '${d.month.toString().padLeft(2, '0')}-'
+      '${d.day.toString().padLeft(2, '0')}';
+}
+
+
+/// `payload_json` nests some sections as encoded strings and some as maps,
+/// depending on which writer produced them — decode either shape.
+Map<String, dynamic>? _section(Object? v) {
+  if (v is Map<String, dynamic>) return v;
+  if (v is String) {
+    try {
+      final d = jsonDecode(v);
+      if (d is Map<String, dynamic>) return d;
+    } on FormatException {
+      // A rendered value ("—"), not an encoded section.
+    }
+  }
+  return null;
+}
+
+/// Beats the RR pipeline actually used for [day], or null if it did not run.
+int? _beatsUsed(Map<String, Object?> row) {
+  final payload = _section(row['payload_json']);
+  final irregular = _section(_section(payload?['clinical'])?['irregular_24h']);
+  return _section(irregular?['value'])?['n_beats'] as int?;
+}
 
 void main() {
   late Directory tmp;
@@ -246,7 +279,7 @@ void main() {
     // (The NaN path proper is exercised through the CSV importer, where
     // `double.tryParse('NaN')` genuinely produces one — see
     // noop_schema_drift_test.dart.)
-    const t0 = 1785919200; // 2026-08-05
+    const t0 = 1786608000; // 2026-08-13, a day no other fixture here uses
     final path = p.join(tmp.path, 'nan.sqlite');
     if (File(path).existsSync()) File(path).deleteSync();
     final src = await databaseFactory.openDatabase(path);
@@ -255,12 +288,15 @@ void main() {
     await src.execute('CREATE TABLE rrInterval (deviceId TEXT, ts INTEGER, '
         'rrMs REAL, PRIMARY KEY (deviceId, ts, rrMs))');
     final b = src.batch();
-    for (var i = 0; i < 120; i++) {
+    // 600 beats: the irregular-rhythm screen (the one payload field that
+    // reports how many beats it actually used) needs a real window before it
+    // emits anything, and without it there is nothing to assert on.
+    for (var i = 0; i < 600; i++) {
       b.insert('hrSample', {'deviceId': 'd', 'ts': t0 + i, 'bpm': 65});
       b.insert('rrInterval', {
         'deviceId': 'd',
         'ts': t0 + i,
-        'rrMs': i == 60 ? double.infinity : 900.0,
+        'rrMs': i == 300 ? double.infinity : 900.0,
       });
     }
     await b.commit(noResult: true);
@@ -271,11 +307,21 @@ void main() {
         bak, const Profile(), DerivationEngine());
     expect(res.days, greaterThan(0), reason: 'the day still imports');
 
+    // The beat COUNT is what discriminates — the row's typed columns hold no
+    // derived metric at all, so sweeping them for a non-finite double passes
+    // whatever the guard does. 120 beats written, one of them infinite.
+    final day = _localDay(t0);
     final db = await LocalDb.instance;
-    final rows = await db.query('day_result');
+    final rows =
+        await db.query('day_result', where: 'day_id = ?', whereArgs: [day]);
+    var checked = 0;
     for (final r in rows) {
-      expect(r.values.whereType<double>().where((v) => !v.isFinite), isEmpty);
+      final n = _beatsUsed(r);
+      if (n == null) continue;
+      expect(n, 599, reason: 'the infinite beat is dropped, not counted');
+      checked++;
     }
+    expect(checked, greaterThan(0), reason: 'the assertion must have run');
   }, timeout: const Timeout(Duration(minutes: 5)));
 
   test('a database that is not a NOOP backup is named, not silently empty',
@@ -381,6 +427,39 @@ void main() {
     // count can be exact.
     expect(res.rows, n);
   }, timeout: const Timeout(Duration(minutes: 2)));
+
+  test('a fractional timestamp at midnight is not read by both days', () async {
+    // The day windows are half-open, but `ts > from - 1` only expresses that
+    // for integral timestamps: against a fractional one the interval
+    // (midnight-1, midnight) belongs to the day before AND the day after. The
+    // map-keyed channels absorb the double read; `rr()` appends, so the night
+    // gets a duplicate beat and its RMSSD is wrong.
+    final midnight = DateTime(2026, 8, 5).millisecondsSinceEpoch ~/ 1000;
+    final path = p.join(tmp.path, 'straddle.sqlite');
+    if (File(path).existsSync()) File(path).deleteSync();
+    final src = await databaseFactory.openDatabase(path);
+    await src.execute('CREATE TABLE hrSample (deviceId TEXT, ts REAL, '
+        'bpm INTEGER, PRIMARY KEY (deviceId, ts))');
+    await src.execute('CREATE TABLE rrInterval (deviceId TEXT, ts REAL, '
+        'rrMs REAL, PRIMARY KEY (deviceId, ts, rrMs))');
+    final b = src.batch();
+    var expected = 0;
+    // 20 min either side of midnight, every sample on a .5 offset.
+    for (var i = -1200; i < 1200; i++) {
+      final ts = midnight + i + 0.5;
+      b.insert('hrSample', {'deviceId': 'd', 'ts': ts, 'bpm': 60});
+      b.insert('rrInterval', {'deviceId': 'd', 'ts': ts, 'rrMs': 900.0});
+      expected += 2;
+    }
+    await b.commit(noResult: true);
+    await src.close();
+    final bak = writeBackup('straddle.noopbak', path);
+
+    final res = await NoopImporter.importFile(
+        bak, const Profile(), DerivationEngine());
+    expect(res.rows, expected,
+        reason: 'every sample is read exactly once, on exactly one day');
+  }, timeout: const Timeout(Duration(minutes: 5)));
 
   test('a renamed column is a message, not a raw SQL error mid-import',
       () async {

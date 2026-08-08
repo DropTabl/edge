@@ -244,11 +244,15 @@ Future<ResolvedNoopDatabase?> resolveNoopDatabase(String path) async {
     // of it. Silent partial history is the worst outcome here, so verify the
     // whole member landed. (Dart has no portable free-space API, hence checking
     // after rather than before.)
-      // The size is checked in BOTH directions. Short means the write ran out
-      // of space, and a truncated database still opens — importing a fraction
-      // of someone's history as if it were all of it. Long means the archive's
-      // declared size is not what it actually holds, which is the only thing
-      // the ceiling above was checked against, so the ceiling did not hold.
+      // The size is checked in BOTH directions, AFTER the write. Short means it
+      // ran out of space, and a truncated database still opens — importing a
+      // fraction of someone's history as if it were all of it. Long means the
+      // archive's declared size is not what it actually holds, so the ceiling
+      // above was checked against a number that turned out to be fiction. Note
+      // this REPORTS an over-run rather than preventing it: the bytes are on
+      // disk by the time we can compare, and bounding that would need a
+      // size-limited sink around the decoder. Rejecting after the fact is still
+      // worth it — the file is deleted below and never imported.
       final written = await File(destPath).length();
       if (db.size > 0 && written < db.size) {
         throw ImportFormatException(

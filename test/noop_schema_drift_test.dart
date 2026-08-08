@@ -12,6 +12,7 @@
 // There was no test that parsed a real NOOP CSV at all — only the pure
 // `decideRow` ordering contract — which is why the drift shipped unnoticed.
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -45,6 +46,29 @@ String _row(int ts, String stream,
     '$ts', iso, stream, hr, rr, gx, gy, gz, stepCounter, '', '', '', '',
     skinTemp, '', sleepState, eventKind, eventPayload,
   ].join(',');
+}
+
+
+/// `payload_json` nests some sections as encoded strings and some as maps,
+/// depending on which writer produced them — decode either shape.
+Map<String, dynamic>? _section(Object? v) {
+  if (v is Map<String, dynamic>) return v;
+  if (v is String) {
+    try {
+      final d = jsonDecode(v);
+      if (d is Map<String, dynamic>) return d;
+    } on FormatException {
+      // A rendered value ("—"), not an encoded section.
+    }
+  }
+  return null;
+}
+
+/// Beats the RR pipeline actually used for [day], or null if it did not run.
+int? _beatsUsed(Map<String, Object?> row) {
+  final payload = _section(row['payload_json']);
+  final irregular = _section(_section(payload?['clinical'])?['irregular_24h']);
+  return _section(irregular?['value'])?['n_beats'] as int?;
 }
 
 void main() {
@@ -322,11 +346,27 @@ void main() {
           f.path, const Profile(), DerivationEngine());
       expect(res.days, greaterThan(0));
 
+      // Assert on the BEAT COUNT the pipeline actually used, not on the row's
+      // typed columns: every derived metric lives inside `payload_json`, so a
+      // `whereType<double>` sweep over the row finds nothing and passes however
+      // broken the guard is. 600 beats were written, two of them non-finite.
+      final d = DateTime.fromMillisecondsSinceEpoch(t0 * 1000);
+      final day = '${d.year.toString().padLeft(4, '0')}-'
+          '${d.month.toString().padLeft(2, '0')}-'
+          '${d.day.toString().padLeft(2, '0')}';
       final db = await LocalDb.instance;
-      for (final r in await db.query('day_result')) {
-        expect(r.values.whereType<double>().where((v) => !v.isFinite), isEmpty,
-            reason: 'a non-finite beat must never reach a stored metric');
+      final rows =
+          await db.query('day_result', where: 'day_id = ?', whereArgs: [day]);
+      expect(rows, isNotEmpty);
+      var checked = 0;
+      for (final r in rows) {
+        final n = _beatsUsed(r);
+        if (n == null) continue;
+        expect(n, 598,
+            reason: 'the NaN and the Infinity are dropped, not counted');
+        checked++;
       }
+      expect(checked, greaterThan(0), reason: 'the assertion must have run');
     }, timeout: const Timeout(Duration(minutes: 5)));
 
     test('an UNKNOWN future stream is skipped, not fatal', () async {
