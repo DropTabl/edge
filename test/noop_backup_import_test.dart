@@ -1,0 +1,268 @@
+// Importing a `.noopbak` full backup (OpenStrap/edge#160, #199).
+//
+// A `.noopbak` is a ZIP around NOOP's own GRDB SQLite database, and on iOS it is
+// the only export NOOP offers — so the CSV-only importer left every iOS migrant
+// with no way in. The schema below is the one measured on a real 13-day backup
+// (260 MB, NOOP 9.x); the traps it pins are the ones that file actually carries:
+// empty `spo2Sample`/`respSample` tables, and a deviceId that differs between
+// the sample tables ("my-whoop") and `sleepSession` ("my-whoop-noop").
+
+import 'dart:io';
+
+import 'package:archive/archive.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:openstrap_edge/compute/derivation_engine.dart';
+import 'package:openstrap_edge/compute/profile.dart';
+import 'package:openstrap_edge/data/db.dart';
+import 'package:openstrap_edge/import/import_container.dart';
+import 'package:openstrap_edge/import/noop_backup_import.dart';
+import 'package:openstrap_edge/import/noop_import.dart';
+
+void main() {
+  late Directory tmp;
+
+  setUpAll(() async {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+    LocalDb.dbName = 'openstrap_noopbak_test.db';
+    final dir = await databaseFactory.getDatabasesPath();
+    await databaseFactory.deleteDatabase(p.join(dir, LocalDb.dbName));
+    tmp = await Directory.systemTemp.createTemp('noopbak');
+  });
+
+  tearDownAll(() async {
+    await LocalDb.close();
+    final dir = await databaseFactory.getDatabasesPath();
+    await databaseFactory.deleteDatabase(p.join(dir, LocalDb.dbName));
+    if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+  });
+
+  /// Write a NOOP-schema database holding [seconds] of 1 Hz data from [t0],
+  /// with the step counter walking 1/s. Returns its path.
+  Future<String> writeNoopDb(
+    String name, {
+    required int t0,
+    required int seconds,
+    String deviceId = 'my-whoop',
+    bool withEmptyOptionalTables = true,
+  }) async {
+    final path = p.join(tmp.path, name);
+    if (File(path).existsSync()) File(path).deleteSync();
+    final db = await databaseFactory.openDatabase(path);
+    await db.execute('CREATE TABLE hrSample (deviceId TEXT NOT NULL, '
+        'ts INTEGER NOT NULL, bpm INTEGER NOT NULL, synced INTEGER NOT NULL '
+        'DEFAULT 0, PRIMARY KEY (deviceId, ts))');
+    await db.execute('CREATE TABLE rrInterval (deviceId TEXT NOT NULL, '
+        'ts INTEGER NOT NULL, rrMs INTEGER NOT NULL, synced INTEGER NOT NULL '
+        'DEFAULT 0, PRIMARY KEY (deviceId, ts, rrMs))');
+    await db.execute('CREATE TABLE gravitySample (deviceId TEXT NOT NULL, '
+        'ts INTEGER NOT NULL, x DOUBLE NOT NULL, y DOUBLE NOT NULL, '
+        'z DOUBLE NOT NULL, PRIMARY KEY (deviceId, ts))');
+    await db.execute('CREATE TABLE skinTempSample (deviceId TEXT NOT NULL, '
+        'ts INTEGER NOT NULL, raw INTEGER NOT NULL, PRIMARY KEY (deviceId, ts))');
+    await db.execute('CREATE TABLE stepSample (deviceId TEXT NOT NULL, '
+        'ts INTEGER NOT NULL, counter INTEGER NOT NULL, '
+        'PRIMARY KEY (deviceId, ts))');
+    if (withEmptyOptionalTables) {
+      // Present but EMPTY in the real backup — the importer must read them
+      // without deciding the file is unusable.
+      await db.execute('CREATE TABLE spo2Sample (deviceId TEXT NOT NULL, '
+          'ts INTEGER NOT NULL, red INTEGER NOT NULL, ir INTEGER NOT NULL, '
+          'PRIMARY KEY (deviceId, ts))');
+      await db.execute('CREATE TABLE respSample (deviceId TEXT NOT NULL, '
+          'ts INTEGER NOT NULL, raw INTEGER NOT NULL, '
+          'PRIMARY KEY (deviceId, ts))');
+    }
+    // NOOP's own scores. Note the DIFFERENT deviceId, exactly as shipped — we
+    // never read these, and nothing may filter samples on a device id because of
+    // it.
+    await db.execute('CREATE TABLE sleepSession (deviceId TEXT NOT NULL, '
+        'startTs INTEGER NOT NULL, endTs INTEGER NOT NULL, efficiency DOUBLE, '
+        'restingHr INTEGER, avgHrv DOUBLE, stagesJSON TEXT, '
+        'PRIMARY KEY (deviceId, startTs))');
+    await db.insert('sleepSession', {
+      'deviceId': '$deviceId-noop',
+      'startTs': t0,
+      'endTs': t0 + seconds,
+      'efficiency': 0.93,
+      'restingHr': 52,
+      'avgHrv': 95.3,
+      'stagesJSON': '[]',
+    });
+
+    final batch = db.batch();
+    for (var i = 0; i < seconds; i++) {
+      final ts = t0 + i;
+      batch.insert('hrSample', {
+        'deviceId': deviceId,
+        'ts': ts,
+        'bpm': 60 + (i % 20),
+      });
+      batch.insert('gravitySample', {
+        'deviceId': deviceId,
+        'ts': ts,
+        'x': 0.1,
+        'y': 0.2,
+        'z': 0.97,
+      });
+      batch.insert(
+          'skinTempSample', {'deviceId': deviceId, 'ts': ts, 'raw': 3240});
+      batch.insert('stepSample', {
+        'deviceId': deviceId,
+        'ts': ts,
+        'counter': 24302 + i,
+      });
+      if (i % 2 == 0) {
+        batch.insert(
+            'rrInterval', {'deviceId': deviceId, 'ts': ts, 'rrMs': 900 + i % 40});
+      }
+    }
+    await batch.commit(noResult: true);
+    await db.close();
+    return path;
+  }
+
+  /// Zip [dbPath] up the way NOOP does: one member, named `noop-backup.sqlite`.
+  String writeBackup(String name, String dbPath, {String? extraMember}) {
+    final archive = Archive();
+    final bytes = File(dbPath).readAsBytesSync();
+    archive.addFile(ArchiveFile('noop-backup.sqlite', bytes.length, bytes));
+    if (extraMember != null) {
+      final e = [1, 2, 3];
+      archive.addFile(ArchiveFile(extraMember, e.length, e));
+    }
+    final out = p.join(tmp.path, name);
+    File(out).writeAsBytesSync(ZipEncoder().encode(archive));
+    return out;
+  }
+
+  test('imports a .noopbak end to end, banking the band step counter',
+      () async {
+    // 2026-07-31T09:00:00Z, 40 min of 1 Hz data.
+    const t0 = 1785488400;
+    const secs = 2400;
+    final dbPath = await writeNoopDb('a.sqlite', t0: t0, seconds: secs);
+    final bak = writeBackup('backup.noopbak', dbPath);
+
+    final res = await NoopImporter.importFile(
+        bak, const Profile(), DerivationEngine());
+
+    expect(res.days, greaterThan(0));
+    expect(res.lateRows, 0);
+    // Every 1 Hz channel row counts, so the row total dwarfs the second count.
+    expect(res.rows, greaterThan(secs));
+    // The band's own counter, banked as REAL steps rather than an estimate.
+    expect(res.steps, secs - 1);
+
+    final db = await LocalDb.instance;
+    final cov = await db.query('live_coverage');
+    expect(cov.fold<int>(0, (a, r) => a + (r['steps'] as int)), secs - 1);
+
+    // The day derived from the backup's own samples, not from NOOP's scores.
+    final days = await db.query('day_result');
+    expect(days, isNotEmpty);
+  }, timeout: const Timeout(Duration(minutes: 5)));
+
+  test('re-importing the same backup does not double-count steps', () async {
+    const t0 = 1785660000; // 2026-08-02
+    const secs = 900;
+    final dbPath = await writeNoopDb('b.sqlite', t0: t0, seconds: secs);
+    final bak = writeBackup('b.noopbak', dbPath);
+
+    final first = await NoopImporter.importFile(
+        bak, const Profile(), DerivationEngine());
+    expect(first.steps, secs - 1);
+
+    final again = await NoopImporter.importFile(
+        bak, const Profile(), DerivationEngine());
+    expect(again.steps, 0, reason: 'the span is already covered');
+  }, timeout: const Timeout(Duration(minutes: 5)));
+
+  test('the unpacked database is deleted once the import finishes', () async {
+    const t0 = 1785746400; // 2026-08-03
+    final dbPath = await writeNoopDb('c.sqlite', t0: t0, seconds: 120);
+    final bak = writeBackup('c.noopbak', dbPath);
+
+    final before = tmp.listSync().whereType<Directory>().length;
+    await NoopImporter.importFile(bak, const Profile(), DerivationEngine());
+    // Nothing extracted survives — a 260 MB backup would otherwise leave a full
+    // second copy behind on the phone.
+    final leftovers = Directory.systemTemp
+        .listSync()
+        .whereType<Directory>()
+        .where((d) => p.basename(d.path).startsWith('openstrap_noopbak_'));
+    expect(leftovers, isEmpty);
+    expect(tmp.listSync().whereType<Directory>().length, before);
+  }, timeout: const Timeout(Duration(minutes: 5)));
+
+  test('no RR beat is lost to a page boundary inside a second', () async {
+    // `rrInterval`'s key is (deviceId, ts, rrMs): one second holds several
+    // beats. Keyset paging on ts alone would skip whatever sits past the page
+    // edge within that second — silently, and only on real-sized backups.
+    const t0 = 1785832800; // 2026-08-04
+    const secs = 300;
+    const beatsPerSec = 4;
+    final path = p.join(tmp.path, 'rr.sqlite');
+    if (File(path).existsSync()) File(path).deleteSync();
+    final src = await databaseFactory.openDatabase(path);
+    await src.execute('CREATE TABLE hrSample (deviceId TEXT, ts INTEGER, '
+        'bpm INTEGER, PRIMARY KEY (deviceId, ts))');
+    await src.execute('CREATE TABLE rrInterval (deviceId TEXT, ts INTEGER, '
+        'rrMs INTEGER, PRIMARY KEY (deviceId, ts, rrMs))');
+    final b = src.batch();
+    for (var i = 0; i < secs; i++) {
+      b.insert('hrSample', {'deviceId': 'd', 'ts': t0 + i, 'bpm': 65});
+      for (var k = 0; k < beatsPerSec; k++) {
+        b.insert(
+            'rrInterval', {'deviceId': 'd', 'ts': t0 + i, 'rrMs': 800 + k * 7});
+      }
+    }
+    await b.commit(noResult: true);
+    await src.close();
+    final bak = writeBackup('rr.noopbak', path);
+
+    // A page size that cannot align to the 4-beats-per-second grid, so
+    // boundaries land mid-second.
+    final saved = kNoopBackupPageRows;
+    kNoopBackupPageRows = 7;
+    addTearDown(() => kNoopBackupPageRows = saved);
+
+    final res = await NoopImporter.importFile(
+        bak, const Profile(), DerivationEngine());
+    expect(res.rows, secs + secs * beatsPerSec,
+        reason: 'every HR sample and every RR beat was read');
+  }, timeout: const Timeout(Duration(minutes: 5)));
+
+  test('a database that is not a NOOP backup is named, not silently empty',
+      () async {
+    final path = p.join(tmp.path, 'other.sqlite');
+    final db = await databaseFactory.openDatabase(path);
+    await db.execute('CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)');
+    await db.close();
+    final bak = writeBackup('other.noopbak', path);
+
+    await expectLater(
+      NoopImporter.importFile(bak, const Profile(), DerivationEngine()),
+      throwsA(isA<ImportFormatException>()
+          .having((e) => e.message, 'message', contains('hrSample'))),
+    );
+  });
+
+  test('a backup with no samples says so rather than importing 0 days',
+      () async {
+    final path = p.join(tmp.path, 'empty.sqlite');
+    final db = await databaseFactory.openDatabase(path);
+    await db.execute('CREATE TABLE hrSample (deviceId TEXT, ts INTEGER, '
+        'bpm INTEGER, PRIMARY KEY (deviceId, ts))');
+    await db.close();
+    final bak = writeBackup('empty.noopbak', path);
+
+    await expectLater(
+      NoopImporter.importFile(bak, const Profile(), DerivationEngine()),
+      throwsA(isA<ImportFormatException>()
+          .having((e) => e.message, 'message', contains('no samples'))),
+    );
+  });
+}

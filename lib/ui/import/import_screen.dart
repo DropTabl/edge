@@ -150,7 +150,8 @@ class _ImportScreenState extends State<ImportScreen> {
           ImportOptionCard(
             icon: OsIcon.heartRate,
             title: 'Import from NOOP',
-            body: 'Raw 1 Hz CSV — re-analyzed end-to-end on this phone.',
+            body: 'A .noopbak backup or the raw 1 Hz CSV — re-analyzed '
+                'end-to-end on this phone.',
             onTap: _locked ? null : _importNoop,
           ),
           const SizedBox(height: Sp.x3),
