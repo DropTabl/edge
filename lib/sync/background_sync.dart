@@ -24,6 +24,7 @@ import '../compute/profile.dart';
 import '../data/db.dart';
 import '../notify/notification_center.dart';
 import '../notify/notification_event.dart';
+import '../state/alarm_schedule.dart';
 import 'band_ownership.dart';
 import 'high_freq_wake_window.dart';
 import 'paired_device.dart';
@@ -127,6 +128,46 @@ Future<bool> runHeadlessSync({BandLease? lease}) async {
       // and the next wake resumes from the (now-advanced) cursor. No live streams
       // (battery): connect → listen → store → ACK → derive → disconnect.
       await engine.runSync();
+      // Feature 1's arming engine, headless half: "on every successful
+      // connect AND after each headless sync". No AppState here, so the
+      // schedule read and the `alarm_epoch` persistence go straight through
+      // LocalDb/SharedPreferences — the same store the foreground path uses,
+      // so whichever side runs next sees a consistent value.
+      try {
+        final schedule = fillDefaultAlarmSchedule([
+          for (final r in await LocalDb.alarmScheduleRows())
+            AlarmScheduleEntry.fromRow(r),
+        ]);
+        final prefs = await SharedPreferences.getInstance();
+        final result = await armNextScheduledOccurrence(
+          engine: engine,
+          schedule: schedule,
+          currentArmedEpoch: prefs.getInt('alarm_epoch'),
+        );
+        if (result.disabled) {
+          await prefs.remove('alarm_epoch');
+          await prefs.remove('alarm_epoch_confirmed');
+        } else if (result.epoch != null) {
+          final epoch = result.epoch!;
+          // No live AppState here to catch a late ALARM_SET (event 56) the way
+          // the foreground grace timer does, so wait for it inline — same
+          // grace window as AlarmConfirmation's default (6s) — before this
+          // headless connection closes. Not confirmed within that window still
+          // persists the epoch (optimistic, matching the foreground write) but
+          // as unconfirmed, so the 7pm safety check (AppState._alarmArmedTonight)
+          // won't wrongly treat an un-latched headless arm as covering tonight.
+          final armedAtMs = DateTime.now().millisecondsSinceEpoch;
+          var confirmed = false;
+          for (var i = 0; i < 6 && !confirmed; i++) {
+            await Future.delayed(const Duration(milliseconds: 1000));
+            confirmed = await LocalDb.alarmSetConfirmedSince(armedAtMs);
+          }
+          await prefs.setInt('alarm_epoch', epoch);
+          await prefs.setBool('alarm_epoch_confirmed', confirmed);
+        }
+      } catch (e) {
+        debugPrint('[bgsync] alarm re-arm skipped: $e');
+      }
     } finally {
       await engine.disconnect();
     }
