@@ -1202,10 +1202,12 @@ class AppState extends ChangeNotifier {
       // RESUMABLE SYNC: atomic commit of decoded rows + continuation cursor
       // before the HISTORY_END ACK, and a reader to seed the offload frontier
       // from the durable high-water on (re)connect.
-      onCommitBatch: (raws, samples, trimTokenHex, {archives, deviceFamily}) =>
+      onCommitBatch: (raws, samples, trimTokenHex,
+              {archives, ecgRawPackets, deviceFamily}) =>
           LocalDb.commitSyncBatch(raws, samples,
               trimToken: trimTokenHex,
               archives: archives,
+              ecgRawPackets: ecgRawPackets,
               deviceFamily: deviceFamily,
               onCheckpoint: (msg) => _log('[COMMIT] $msg')),
       // Pre-setup fallback only: the drain path archives inside commitSyncBatch.
