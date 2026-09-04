@@ -65,7 +65,10 @@ void main() {
     created.add(name);
     await _seedEmptyV49Db(name);
     final version = await _openThroughLocalDb(name);
-    expect(LocalDb.schemaVersion, 50);
+    // The v50 rung is what this file isolates; later rungs (v51 added the
+    // WHOOP MG ECG store) ride the same open, so the ladder's top is a floor
+    // here, not a literal.
+    expect(LocalDb.schemaVersion, greaterThanOrEqualTo(50));
     expect(version, LocalDb.schemaVersion);
 
     final db = await LocalDb.instance;
