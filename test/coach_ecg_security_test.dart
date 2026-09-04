@@ -18,32 +18,35 @@ void main() {
     LocalDb.dbName = 'openstrap_coach_ecg_security_test.db';
     final dir = await databaseFactory.getDatabasesPath();
     await databaseFactory.deleteDatabase(p.join(dir, LocalDb.dbName));
-    await LocalDb.insertEcgReading({
-      'id': 'ecg_1',
-      'device_id': 'SERIAL-SECRET',
-      'source': 'mg_labrador',
-      'wrist': 'left',
-      'start_ts': 1787823754,
-      'end_ts': 1787823784,
-      'result_code': 6,
-      'category': 'inconclusive',
-      'avg_hr': 80,
-      'quality': 2,
-      'unreadable_mask': 0,
-      'interruptions': 1,
-      'sample_count': 2,
-      'status': 'inconclusive',
-      'notes': 'private note',
-      'created_at': 1787823784000,
-    }, [
+    await LocalDb.insertEcgReading(
       {
-        'sequence': 1,
+        'id': 'ecg_1',
+        'device_id': 'SERIAL-SECRET',
+        'source': 'mg_labrador',
+        'wrist': 'left',
+        'start_ts': 1787823754,
+        'end_ts': 1787823784,
+        'result_code': 6,
+        'category': 'inconclusive',
+        'avg_hr': 80,
+        'quality': 2,
+        'unreadable_mask': 0,
+        'interruptions': 1,
         'sample_count': 2,
-        'samples': [1, 0, 255, 255],
-        'inner_hex': '2b11deadbeef',
-        'is_placeholder': 0,
+        'status': 'inconclusive',
+        'notes': 'private note',
+        'created_at': 1787823784000,
       },
-    ]);
+      [
+        {
+          'sequence': 1,
+          'sample_count': 2,
+          'samples': [1, 0, 255, 255],
+          'inner_hex': '2b11deadbeef',
+          'is_placeholder': 0,
+        },
+      ],
+    );
   });
 
   tearDownAll(() async {
@@ -55,7 +58,8 @@ void main() {
 
   test('the summary view is readable through run_sql', () async {
     final out = await CoachDb.runCoachSql(
-        'SELECT id, category, avg_hr, duration_s, date FROM v_ecg_readings');
+      'SELECT id, category, avg_hr, duration_s, date FROM v_ecg_readings',
+    );
     expect(out, contains('"ecg_1"'));
     expect(out, contains('inconclusive'));
     expect(out, contains('"duration_s":30'));
@@ -74,14 +78,20 @@ void main() {
 
   for (final t in ['ecg_reading', 'ecg_reading_packet', 'ecg_raw_packet']) {
     test('layer 1 rejects the base table $t', () {
-      expect(() => CoachDb.guardAndPrepare('SELECT * FROM $t'),
-          throwsA(isA<SqlGuardError>()));
-      expect(() => CoachDb.guardAndPrepare('SELECT device_id FROM $t'),
-          throwsA(isA<SqlGuardError>()));
       expect(
-          () => CoachDb.guardAndPrepare(
-              'WITH x AS (SELECT 1) SELECT * FROM v_ecg_readings, $t'),
-          throwsA(isA<SqlGuardError>()));
+        () => CoachDb.guardAndPrepare('SELECT * FROM $t'),
+        throwsA(isA<SqlGuardError>()),
+      );
+      expect(
+        () => CoachDb.guardAndPrepare('SELECT device_id FROM $t'),
+        throwsA(isA<SqlGuardError>()),
+      );
+      expect(
+        () => CoachDb.guardAndPrepare(
+          'WITH x AS (SELECT 1) SELECT * FROM v_ecg_readings, $t',
+        ),
+        throwsA(isA<SqlGuardError>()),
+      );
     });
   }
 
@@ -94,10 +104,14 @@ void main() {
     });
   }
 
-  test('runCoachSql over the packet table returns a rejection, not bytes',
-      () async {
-    final out = await CoachDb.runCoachSql('SELECT inner_hex FROM ecg_reading_packet');
-    expect(out, contains('error'));
-    expect(out, isNot(contains('deadbeef')));
-  });
+  test(
+    'runCoachSql over the packet table returns a rejection, not bytes',
+    () async {
+      final out = await CoachDb.runCoachSql(
+        'SELECT inner_hex FROM ecg_reading_packet',
+      );
+      expect(out, contains('error'));
+      expect(out, isNot(contains('deadbeef')));
+    },
+  );
 }

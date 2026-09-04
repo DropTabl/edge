@@ -20,10 +20,10 @@ enum EcgWrist {
       this == EcgWrist.left ? WristSelection.left : WristSelection.right;
 
   static EcgWrist? parse(String? s) => switch (s) {
-        'left' => EcgWrist.left,
-        'right' => EcgWrist.right,
-        _ => null,
-      };
+    'left' => EcgWrist.left,
+    'right' => EcgWrist.right,
+    _ => null,
+  };
 }
 
 /// The official app's user-facing categories, from HeartKey result code plus
@@ -95,21 +95,21 @@ class EcgAcceptedPacket {
   });
 
   factory EcgAcceptedPacket.of(LabradorR17 r) => EcgAcceptedPacket(
-        sequence: r.sequence,
-        strapSeconds: r.strapSeconds,
-        strapSubsec: r.subseconds,
-        samples: r.samples,
-        inner: r.inner,
-      );
+    sequence: r.sequence,
+    strapSeconds: r.strapSeconds,
+    strapSubsec: r.subseconds,
+    samples: r.samples,
+    inner: r.inner,
+  );
 
   factory EcgAcceptedPacket.placeholder(int sequence) => EcgAcceptedPacket(
-        sequence: sequence,
-        strapSeconds: 0,
-        strapSubsec: 0,
-        samples: Int16List(0),
-        inner: Uint8List(0),
-        placeholder: true,
-      );
+    sequence: sequence,
+    strapSeconds: 0,
+    strapSubsec: 0,
+    samples: Int16List(0),
+    inner: Uint8List(0),
+    placeholder: true,
+  );
 }
 
 /// Persisted status of a reading. Unreadable and first-attempt-inconclusive
@@ -232,31 +232,31 @@ class EcgReading {
       LabradorUnreadableMask(unreadableMask).reasons;
 
   Map<String, Object?> toRow() => {
-        'id': id,
-        'device_id': deviceId,
-        'source': kEcgSource,
-        'wrist': wrist.name,
-        'start_ts': startTs,
-        'end_ts': endTs,
-        'strap_terminal_ts': strapTerminalTs,
-        'strap_terminal_subsec': strapTerminalSubsec,
-        'result_code': resultCode,
-        'category': category.name,
-        'avg_hr': avgHr,
-        'quality': quality,
-        'unreadable_mask': unreadableMask,
-        'interruptions': interruptions,
-        'sample_rate_hz': kEcgSampleRateHz,
-        'sample_unit': kEcgSampleUnit,
-        'sample_count': sampleCount,
-        'min_uv': minUv,
-        'max_uv': maxUv,
-        'rms_uv': rmsUv,
-        'missing_segments': missingSegments,
-        'status': status.name,
-        'notes': notes,
-        'created_at': createdAt,
-      };
+    'id': id,
+    'device_id': deviceId,
+    'source': kEcgSource,
+    'wrist': wrist.name,
+    'start_ts': startTs,
+    'end_ts': endTs,
+    'strap_terminal_ts': strapTerminalTs,
+    'strap_terminal_subsec': strapTerminalSubsec,
+    'result_code': resultCode,
+    'category': category.name,
+    'avg_hr': avgHr,
+    'quality': quality,
+    'unreadable_mask': unreadableMask,
+    'interruptions': interruptions,
+    'sample_rate_hz': kEcgSampleRateHz,
+    'sample_unit': kEcgSampleUnit,
+    'sample_count': sampleCount,
+    'min_uv': minUv,
+    'max_uv': maxUv,
+    'rms_uv': rmsUv,
+    'missing_segments': missingSegments,
+    'status': status.name,
+    'notes': notes,
+    'created_at': createdAt,
+  };
 
   static EcgReading? fromRow(Map<String, Object?> r) {
     final wrist = EcgWrist.parse(r['wrist'] as String?);
@@ -323,14 +323,14 @@ class EcgPacketCodec {
   }
 
   static Map<String, Object?> toRow(EcgAcceptedPacket p) => {
-        'sequence': p.sequence,
-        'strap_seconds': p.placeholder ? null : p.strapSeconds,
-        'strap_subsec': p.placeholder ? null : p.strapSubsec,
-        'sample_count': p.samples.length,
-        'samples': encodeSamples(p.samples),
-        'inner_hex': hex(p.inner),
-        'is_placeholder': p.placeholder ? 1 : 0,
-      };
+    'sequence': p.sequence,
+    'strap_seconds': p.placeholder ? null : p.strapSeconds,
+    'strap_subsec': p.placeholder ? null : p.strapSubsec,
+    'sample_count': p.samples.length,
+    'samples': encodeSamples(p.samples),
+    'inner_hex': hex(p.inner),
+    'is_placeholder': p.placeholder ? 1 : 0,
+  };
 
   static EcgAcceptedPacket fromRow(Map<String, Object?> r) {
     final placeholder = ((r['is_placeholder'] as num?)?.toInt() ?? 0) != 0;
@@ -338,8 +338,8 @@ class EcgPacketCodec {
     final bytes = raw is Uint8List
         ? raw
         : raw is List<int>
-            ? Uint8List.fromList(raw)
-            : Uint8List(0);
+        ? Uint8List.fromList(raw)
+        : Uint8List(0);
     return EcgAcceptedPacket(
       sequence: (r['sequence'] as num?)?.toInt() ?? 0,
       strapSeconds: (r['strap_seconds'] as num?)?.toInt() ?? 0,

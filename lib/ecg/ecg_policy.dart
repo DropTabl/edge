@@ -46,13 +46,13 @@ class EcgReducerState {
   /// A fresh WAITING state. [retriesUsed] is 1 on the single inconclusive
   /// retry, which is what makes a second inconclusive terminal final.
   const EcgReducerState.initial({int retriesUsed = 0})
-      : this(
-          phase: EcgPhase.waiting,
-          accepted: const [],
-          previous: null,
-          interruptions: 0,
-          retriesUsed: retriesUsed,
-        );
+    : this(
+        phase: EcgPhase.waiting,
+        accepted: const [],
+        previous: null,
+        interruptions: 0,
+        retriesUsed: retriesUsed,
+      );
 
   EcgReducerState _with({
     EcgPhase? phase,
@@ -60,14 +60,13 @@ class EcgReducerState {
     LabradorR17? previous,
     bool clearPrevious = false,
     int? interruptions,
-  }) =>
-      EcgReducerState(
-        phase: phase ?? this.phase,
-        accepted: accepted ?? this.accepted,
-        previous: clearPrevious ? null : (previous ?? this.previous),
-        interruptions: interruptions ?? this.interruptions,
-        retriesUsed: retriesUsed,
-      );
+  }) => EcgReducerState(
+    phase: phase ?? this.phase,
+    accepted: accepted ?? this.accepted,
+    previous: clearPrevious ? null : (previous ?? this.previous),
+    interruptions: interruptions ?? this.interruptions,
+    retriesUsed: retriesUsed,
+  );
 }
 
 /// What the controller must do after a step, in order.
@@ -193,7 +192,8 @@ EcgReducerStep reduceEcg(EcgReducerState s, LabradorR17 f) {
 
     case EcgPhase.active:
       final prev = s.previous;
-      final lost = !f.presence ||
+      final lost =
+          !f.presence ||
           f.progress == 0 ||
           (prev != null && f.progress < prev.progress);
       if (lost) {
@@ -210,13 +210,20 @@ EcgReducerStep reduceEcg(EcgReducerState s, LabradorR17 f) {
       if (f.isTerminal) return _terminal(s, f);
       if (f.isInvalid) {
         return EcgReducerStep(
-          s._with(phase: EcgPhase.done, accepted: const [], clearPrevious: true),
+          s._with(
+            phase: EcgPhase.done,
+            accepted: const [],
+            clearPrevious: true,
+          ),
           const [EcgClear(), EcgFail('progress_255')],
         );
       }
       if (f.flags.currentS2One) {
         final (accepted, effects) = _append(s, f);
-        return EcgReducerStep(s._with(accepted: accepted, previous: f), effects);
+        return EcgReducerStep(
+          s._with(accepted: accepted, previous: f),
+          effects,
+        );
       }
       // Valid, nondecreasing, nonterminal, presence set, S2-state-1 flag
       // clear: the distinct explicit-RESTART branch. Only the unfinished
@@ -236,7 +243,11 @@ EcgReducerStep reduceEcg(EcgReducerState s, LabradorR17 f) {
       }
       if (f.isInvalid || s.interruptions >= 3) {
         return EcgReducerStep(
-          s._with(phase: EcgPhase.done, accepted: const [], clearPrevious: true),
+          s._with(
+            phase: EcgPhase.done,
+            accepted: const [],
+            clearPrevious: true,
+          ),
           [
             const EcgClear(),
             EcgFail(f.isInvalid ? 'progress_255' : 'interruptions'),
@@ -250,18 +261,23 @@ EcgReducerStep reduceEcg(EcgReducerState s, LabradorR17 f) {
 EcgReducerStep _terminal(EcgReducerState s, LabradorR17 f) {
   final live = categoryFor(f.result, f.liveHr);
   final persisted = categoryFor(f.result, f.averageHr);
-  EcgReducerStep finish(EcgTerminalKind kind, List<EcgAcceptedPacket> accepted,
-      List<EcgEffect> pre) {
+  EcgReducerStep finish(
+    EcgTerminalKind kind,
+    List<EcgAcceptedPacket> accepted,
+    List<EcgEffect> pre,
+  ) {
     return EcgReducerStep(
       s._with(phase: EcgPhase.done, accepted: accepted, previous: f),
       [
         ...pre,
-        EcgTerminal(EcgTerminalOutcome(
-          kind: kind,
-          liveCategory: live,
-          persistedCategory: persisted,
-          terminal: f,
-        )),
+        EcgTerminal(
+          EcgTerminalOutcome(
+            kind: kind,
+            liveCategory: live,
+            persistedCategory: persisted,
+            terminal: f,
+          ),
+        ),
       ],
     );
   }
@@ -270,8 +286,9 @@ EcgReducerStep _terminal(EcgReducerState s, LabradorR17 f) {
     return finish(EcgTerminalKind.unreadable, const [], const [EcgClear()]);
   }
   if (live == EcgCategory.inconclusive && s.retriesUsed == 0) {
-    return finish(
-        EcgTerminalKind.inconclusiveOfferRetry, const [], const [EcgClear()]);
+    return finish(EcgTerminalKind.inconclusiveOfferRetry, const [], const [
+      EcgClear(),
+    ]);
   }
   final (accepted, effects) = _append(s, f);
   return finish(

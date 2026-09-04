@@ -22,12 +22,15 @@ class BleEngineEcgTransport implements EcgTransport {
   /// Wire this to `BleEngine.onEcgEvent`.
   void onEngineEvent(EcgEngineEvent e) {
     _events.add(switch (e) {
-      EcgFrameEvent(:final r17, :final linkGeneration) =>
-        EcgTransportFrame(r17, linkGeneration),
+      EcgFrameEvent(:final r17, :final linkGeneration) => EcgTransportFrame(
+        r17,
+        linkGeneration,
+      ),
       EcgMalformedR17Event(:final reason, :final linkGeneration) =>
         EcgTransportMalformed(linkGeneration, reason),
-      EcgLinkDownEvent(:final linkGeneration) =>
-        EcgTransportLinkDown(linkGeneration),
+      EcgLinkDownEvent(:final linkGeneration) => EcgTransportLinkDown(
+        linkGeneration,
+      ),
     });
   }
 
@@ -71,7 +74,10 @@ class BleEngineEcgTransport implements EcgTransport {
       ]);
 
   @override
-  Future<EcgCommandListResult> prepare(EcgLeaseHandle lease, EcgWrist wrist) async =>
+  Future<EcgCommandListResult> prepare(
+    EcgLeaseHandle lease,
+    EcgWrist wrist,
+  ) async =>
       _wrap(await engine.ecgPrepare(lease.token as EcgLease, wrist.selection));
 
   @override

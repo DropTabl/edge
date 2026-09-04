@@ -26,6 +26,8 @@ import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
 
 import '../data/day_label.dart';
+import '../data/db.dart';
+import '../ecg/ecg_models.dart';
 import '../data/journal_fields.dart';
 import '../data/local_repository.dart';
 import '../data/med_store.dart';
@@ -95,6 +97,99 @@ class CoachActions {
       minute % 60,
     );
     return d.millisecondsSinceEpoch ~/ 1000;
+  }
+
+  // ── WHOOP MG ECG ───────────────────────────────────────────────────────────
+
+  /// At most this many waveform buckets leave the device.
+  static const int ecgEnvelopeBuckets = 300;
+
+  /// One saved ECG reading for the coach: the band-reported summary plus a
+  /// bounded min/max envelope of the accepted waveform. A BOUND query on the
+  /// reading id — never model-written SQL — and never the raw frame hex, the
+  /// band serial, the device id, the notes or all 3,000 samples. Min/max per
+  /// bucket, not an average, so a peak survives the downsampling.
+  static Future<String> ecgReading(Database db, Object? id) async {
+    final readingId = str(id);
+    if (readingId.isEmpty) {
+      throw CoachActionError('get_ecg_reading needs a reading_id.');
+    }
+    final row = await LocalDb.ecgReading(readingId);
+    final reading = row == null ? null : EcgReading.fromRow(row);
+    if (reading == null) {
+      return jsonEncode({'error': 'No ECG reading with id $readingId.'});
+    }
+    final packets = (await LocalDb.ecgReadingPackets(readingId))
+        .map(EcgPacketCodec.fromRow)
+        .toList();
+    final samples = <int?>[];
+    for (final p in packets) {
+      if (p.placeholder) {
+        // One second of "no data" keeps the envelope's time axis honest.
+        samples.addAll(List<int?>.filled(kEcgSampleRateHz, null));
+      } else {
+        samples.addAll(p.samples);
+      }
+    }
+    final envelope = ecgEnvelope(samples, ecgEnvelopeBuckets);
+    final local = DateTime.fromMillisecondsSinceEpoch(reading.startTs * 1000);
+    return jsonEncode({
+      'id': reading.id,
+      'local_time': local.toIso8601String(),
+      'date': dayLabelOf(local),
+      'status': reading.status.name,
+      'band_category': reading.category.name,
+      'result_code': reading.resultCode,
+      'avg_hr': reading.avgHr,
+      'quality': reading.quality,
+      'unreadable_reasons': reading.unreadableReasons,
+      'interruptions': reading.interruptions,
+      'duration_s': reading.durationS,
+      'sample_count': reading.sampleCount,
+      'missing_segments': reading.missingSegments,
+      'min_uv': reading.minUv,
+      'max_uv': reading.maxUv,
+      'rms_uv': reading.rmsUv,
+      'source': 'WHOOP MG band (HeartKey result; category is the band\'s)',
+      'unit': reading.sampleCount == 0 ? null : kEcgSampleUnit,
+      'sample_rate_hz': kEcgSampleRateHz,
+      'waveform_envelope': {
+        'buckets': envelope.length,
+        'bucket_ms': samples.isEmpty
+            ? null
+            : (samples.length * 1000 / kEcgSampleRateHz / envelope.length)
+                .round(),
+        'points': envelope,
+        'note': 'per-bucket [min, max] in filtered input-referred microvolts; '
+            'null where the accepted window has a missing segment',
+      },
+      'note': 'Band-reported. Not a diagnosis: no lead polarity is proven and '
+          'the phone classifies nothing from the waveform.',
+    });
+  }
+
+  /// Deterministic min/max envelope: [samples] split into at most [buckets]
+  /// contiguous ranges; each yields `[min, max]`, or null when the range
+  /// holds no real sample.
+  static List<List<int>?> ecgEnvelope(List<int?> samples, int buckets) {
+    if (samples.isEmpty || buckets <= 0) return const [];
+    final n = samples.length;
+    final count = n < buckets ? n : buckets;
+    final out = <List<int>?>[];
+    for (var b = 0; b < count; b++) {
+      final lo = (b * n / count).floor();
+      final hi = ((b + 1) * n / count).floor().clamp(lo + 1, n);
+      int? mn;
+      int? mx;
+      for (var i = lo; i < hi; i++) {
+        final v = samples[i];
+        if (v == null) continue;
+        mn = mn == null ? v : (v < mn ? v : mn);
+        mx = mx == null ? v : (v > mx ? v : mx);
+      }
+      out.add(mn == null ? null : [mn, mx!]);
+    }
+    return out;
   }
 
   // ── nutrition ──────────────────────────────────────────────────────────────

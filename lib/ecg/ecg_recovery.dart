@@ -30,14 +30,18 @@ Future<EcgRecoveryOutcome> ecgRecoverRetainedGuard({
 }) async {
   if (serial == null || serial.isEmpty) return EcgRecoveryOutcome.noSerial;
   if (!await guard.isActive(serial)) return EcgRecoveryOutcome.noGuard;
-  log('[ECG] retained may-be-active guard for $serial — sending the cleanup '
-      'triplet before history.');
+  log(
+    '[ECG] retained may-be-active guard for $serial — sending the cleanup '
+    'triplet before history.',
+  );
   final res = await cleanup();
   if (res.allSucceeded && await guard.clear(serial)) {
     log('[ECG] recovery cleanup succeeded — guard cleared.');
     return EcgRecoveryOutcome.cleared;
   }
-  log('[ECG] recovery cleanup incomplete ($res) — guard retained; the next '
-      'connection tries again.');
+  log(
+    '[ECG] recovery cleanup incomplete ($res) — guard retained; the next '
+    'connection tries again.',
+  );
   return EcgRecoveryOutcome.retained;
 }

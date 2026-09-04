@@ -46,11 +46,26 @@ LabradorR17 frame({
   return LabradorR17.parse(inner)!;
 }
 
-LabradorR17 terminal({required int seq, int result = 1, int avgHr = 77, int liveHr = 78, int unreadable = 0}) =>
-    frame(seq: seq, progress: 100, s2State: 2, s2One: false, result: result, avgHr: avgHr, liveHr: liveHr, unreadable: unreadable);
+LabradorR17 terminal({
+  required int seq,
+  int result = 1,
+  int avgHr = 77,
+  int liveHr = 78,
+  int unreadable = 0,
+}) => frame(
+  seq: seq,
+  progress: 100,
+  s2State: 2,
+  s2One: false,
+  result: result,
+  avgHr: avgHr,
+  liveHr: liveHr,
+  unreadable: unreadable,
+);
 
-EcgCommandListResult _ok(List<String> labels) => EcgCommandListResult(
-    [for (final l in labels) EcgMemberOutcome(l, written: true, succeeded: true)]);
+EcgCommandListResult _ok(List<String> labels) => EcgCommandListResult([
+  for (final l in labels) EcgMemberOutcome(l, written: true, succeeded: true),
+]);
 
 class FakeTransport implements EcgTransport {
   final calls = <String>[];
@@ -115,10 +130,14 @@ class FakeTransport implements EcgTransport {
   }
 
   @override
-  Future<void> cancelHistory(EcgLeaseHandle lease) async => calls.add('cancelHistory');
+  Future<void> cancelHistory(EcgLeaseHandle lease) async =>
+      calls.add('cancelHistory');
 
   @override
-  Future<EcgCommandListResult> prepare(EcgLeaseHandle lease, EcgWrist wrist) async {
+  Future<EcgCommandListResult> prepare(
+    EcgLeaseHandle lease,
+    EcgWrist wrist,
+  ) async {
     calls.add('prepare:${wrist.name}');
     return prepareResult ?? _ok(['selectWrist', 'filteredOn', 'rawSaveOn']);
   }
@@ -147,7 +166,8 @@ class FakeTransport implements EcgTransport {
           EcgMemberOutcome(l, written: false, succeeded: false),
       ]);
     }
-    return cleanupResult ?? _ok(['generationStop', 'filteredOff', 'rawSaveOff']);
+    return cleanupResult ??
+        _ok(['generationStop', 'filteredOff', 'rawSaveOff']);
   }
 
   @override
@@ -192,23 +212,26 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('preconditions', () {
-    test('not ready → disconnected; not MG → incompatible; busy → busy', () async {
-      final r = Rig();
-      r.t.ready = false;
-      await r.c.begin(EcgWrist.right);
-      expect(r.c.state.phase, EcgCapturePhase.disconnected);
-      r.t.ready = true;
-      r.t.maverick = false;
-      await r.c.begin(EcgWrist.right);
-      expect(r.c.state.phase, EcgCapturePhase.incompatible);
-      r.t.maverick = true;
-      r.busy = 'workout';
-      await r.c.begin(EcgWrist.right);
-      expect(r.c.state.phase, EcgCapturePhase.busy);
-      expect(r.c.state.reason, 'workout');
-      expect(r.t.calls, isEmpty, reason: 'nothing touched the band');
-      expect(r.guard.log, isEmpty);
-    });
+    test(
+      'not ready → disconnected; not MG → incompatible; busy → busy',
+      () async {
+        final r = Rig();
+        r.t.ready = false;
+        await r.c.begin(EcgWrist.right);
+        expect(r.c.state.phase, EcgCapturePhase.disconnected);
+        r.t.ready = true;
+        r.t.maverick = false;
+        await r.c.begin(EcgWrist.right);
+        expect(r.c.state.phase, EcgCapturePhase.incompatible);
+        r.t.maverick = true;
+        r.busy = 'workout';
+        await r.c.begin(EcgWrist.right);
+        expect(r.c.state.phase, EcgCapturePhase.busy);
+        expect(r.c.state.reason, 'workout');
+        expect(r.t.calls, isEmpty, reason: 'nothing touched the band');
+        expect(r.guard.log, isEmpty);
+      },
+    );
 
     test('a leased transport (recovery or another owner) is busy', () async {
       final r = Rig();
@@ -234,7 +257,11 @@ void main() {
       r.t.emitFrame(frame(seq: 1, presence: false, progress: 0));
       await r.settle();
       expect(r.c.state.phase, EcgCapturePhase.waiting);
-      expect(r.c.live.length, 100, reason: 'the preview shows real samples pre-contact');
+      expect(
+        r.c.live.length,
+        100,
+        reason: 'the preview shows real samples pre-contact',
+      );
 
       r.t.emitFrame(frame(seq: 2, progress: 3, liveHr: 71));
       await r.settle();
@@ -257,14 +284,24 @@ void main() {
       expect(reading.startTs, 1787823754);
       expect(r.c.state.readingId, reading.id);
       // Save happened, then cleanup, then sync — and cleanup exactly once.
-      expect(r.t.calls, ['cancelHistory', 'prepare:right', 'start', 'cleanup', 'release', 'sync']);
+      expect(r.t.calls, [
+        'cancelHistory',
+        'prepare:right',
+        'start',
+        'cleanup',
+        'release',
+        'sync',
+      ]);
       expect(r.guard.active, isEmpty, reason: 'cleared after a full cleanup');
       expect(r.screen, ['hold:ecg', 'release:ecg']);
       expect(r.c.isCapturing, isFalse);
       // The completed phase was never shown before saving/cleanup.
       final completedAt = r.phases.indexOf(EcgCapturePhase.completed);
       expect(r.phases.indexOf(EcgCapturePhase.saving), lessThan(completedAt));
-      expect(r.phases.indexOf(EcgCapturePhase.cleaningUp), lessThan(completedAt));
+      expect(
+        r.phases.indexOf(EcgCapturePhase.cleaningUp),
+        lessThan(completedAt),
+      );
     });
 
     test('a contact frame delivered during the START write is the first '
@@ -277,20 +314,23 @@ void main() {
       expect(r.c.state.phase, EcgCapturePhase.active);
     });
 
-    test('START failing after such a frame discards it and cleans up', () async {
-      final r = Rig();
-      r.t.duringStart = () => r.t.emitFrame(frame(seq: 10, progress: 3));
-      r.t.startResult = EcgCommandListResult(const [
-        EcgMemberOutcome('abortHistorical', written: true, succeeded: true),
-        EcgMemberOutcome('generationStart', written: true, succeeded: false),
-      ]);
-      await r.c.begin(EcgWrist.left);
-      expect(r.c.state.phase, EcgCapturePhase.failed);
-      expect(r.c.state.reason, 'start');
-      expect(r.saved, isEmpty);
-      expect(r.t.calls.where((c) => c == 'cleanup'), hasLength(1));
-      expect(r.guard.active, isEmpty);
-    });
+    test(
+      'START failing after such a frame discards it and cleans up',
+      () async {
+        final r = Rig();
+        r.t.duringStart = () => r.t.emitFrame(frame(seq: 10, progress: 3));
+        r.t.startResult = EcgCommandListResult(const [
+          EcgMemberOutcome('abortHistorical', written: true, succeeded: true),
+          EcgMemberOutcome('generationStart', written: true, succeeded: false),
+        ]);
+        await r.c.begin(EcgWrist.left);
+        expect(r.c.state.phase, EcgCapturePhase.failed);
+        expect(r.c.state.reason, 'start');
+        expect(r.saved, isEmpty);
+        expect(r.t.calls.where((c) => c == 'cleanup'), hasLength(1));
+        expect(r.guard.active, isEmpty);
+      },
+    );
   });
 
   group('command-list failures', () {
@@ -304,7 +344,12 @@ void main() {
       await r.c.begin(EcgWrist.right);
       expect(r.c.state.phase, EcgCapturePhase.failed);
       expect(r.c.state.reason, 'prepare');
-      expect(r.t.calls, ['cancelHistory', 'prepare:right', 'cleanup', 'release']);
+      expect(r.t.calls, [
+        'cancelHistory',
+        'prepare:right',
+        'cleanup',
+        'release',
+      ]);
       expect(r.screen, isEmpty, reason: 'the screen hold comes after PREPARE');
     });
 
@@ -390,31 +435,39 @@ void main() {
       expect(r.t.calls.where((c) => c == 'cleanup'), hasLength(1));
     });
 
-    test('a malformed R17 during capture fails through the single path', () async {
-      final r = Rig();
-      await r.c.begin(EcgWrist.right);
-      r.t.emit(EcgTransportMalformed(r.t.gen, 'r17_parse'));
-      await r.settle();
-      await r.settle();
-      expect(r.c.state.phase, EcgCapturePhase.failed);
-      expect(r.c.state.reason, 'malformed');
-      expect(r.t.calls.where((c) => c == 'cleanup'), hasLength(1));
-    });
+    test(
+      'a malformed R17 during capture fails through the single path',
+      () async {
+        final r = Rig();
+        await r.c.begin(EcgWrist.right);
+        r.t.emit(EcgTransportMalformed(r.t.gen, 'r17_parse'));
+        await r.settle();
+        await r.settle();
+        expect(r.c.state.phase, EcgCapturePhase.failed);
+        expect(r.c.state.reason, 'malformed');
+        expect(r.t.calls.where((c) => c == 'cleanup'), hasLength(1));
+      },
+    );
 
-    test('link loss fails, attempts cleanup (unwritten) and retains the guard',
-        () async {
-      final r = Rig();
-      await r.c.begin(EcgWrist.right);
-      r.t.dropLink();
-      await r.settle();
-      await r.settle();
-      expect(r.c.state.phase, EcgCapturePhase.failed);
-      expect(r.c.state.reason, 'disconnected');
-      expect(r.t.calls, contains('cleanup'));
-      expect(r.guard.active, contains('MG-SERIAL'),
-          reason: 'nothing was written; the next READY recovers');
-      expect(r.c.state.cleanupIncomplete, isTrue);
-    });
+    test(
+      'link loss fails, attempts cleanup (unwritten) and retains the guard',
+      () async {
+        final r = Rig();
+        await r.c.begin(EcgWrist.right);
+        r.t.dropLink();
+        await r.settle();
+        await r.settle();
+        expect(r.c.state.phase, EcgCapturePhase.failed);
+        expect(r.c.state.reason, 'disconnected');
+        expect(r.t.calls, contains('cleanup'));
+        expect(
+          r.guard.active,
+          contains('MG-SERIAL'),
+          reason: 'nothing was written; the next READY recovers',
+        );
+        expect(r.c.state.cleanupIncomplete, isTrue);
+      },
+    );
 
     test('frames from an older link generation are ignored', () async {
       final r = Rig();
@@ -444,7 +497,9 @@ void main() {
       await r.c.begin(EcgWrist.right);
       r.t.holdRestart = Completer<void>();
       r.t.emitFrame(frame(seq: 1, progress: 3));
-      r.t.emitFrame(frame(seq: 2, progress: 6, s2One: false)); // restart predicate
+      r.t.emitFrame(
+        frame(seq: 2, progress: 6, s2One: false),
+      ); // restart predicate
       await r.settle();
       expect(r.c.state.phase, EcgCapturePhase.restarting);
       r.t.emitFrame(frame(seq: 3, progress: 6, s2One: false));
@@ -507,30 +562,32 @@ void main() {
       expect(r.t.syncRequests, 0);
     });
 
-    test('first inconclusive offers one retry; the retry persists inconclusive',
-        () async {
-      final r = Rig();
-      await r.c.begin(EcgWrist.right);
-      r.t.emitFrame(frame(seq: 1, progress: 3));
-      r.t.emitFrame(terminal(seq: 2, result: 6));
-      await r.settle();
-      await r.settle();
-      expect(r.c.state.phase, EcgCapturePhase.inconclusiveRetry);
-      expect(r.saved, isEmpty);
-      expect(r.c.isCapturing, isFalse);
-      await r.c.retry();
-      expect(r.c.state.phase, EcgCapturePhase.waiting);
-      expect(r.t.calls.where((c) => c == 'prepare:right'), hasLength(2));
-      r.t.emitFrame(frame(seq: 3, progress: 3));
-      r.t.emitFrame(terminal(seq: 4, result: 6));
-      await r.settle();
-      await r.settle();
-      expect(r.c.state.phase, EcgCapturePhase.completed);
-      expect(r.saved.single.$1.status, EcgReadingStatus.inconclusive);
-      // No third attempt is offered.
-      await r.c.retry();
-      expect(r.t.calls.where((c) => c == 'prepare:right'), hasLength(2));
-    });
+    test(
+      'first inconclusive offers one retry; the retry persists inconclusive',
+      () async {
+        final r = Rig();
+        await r.c.begin(EcgWrist.right);
+        r.t.emitFrame(frame(seq: 1, progress: 3));
+        r.t.emitFrame(terminal(seq: 2, result: 6));
+        await r.settle();
+        await r.settle();
+        expect(r.c.state.phase, EcgCapturePhase.inconclusiveRetry);
+        expect(r.saved, isEmpty);
+        expect(r.c.isCapturing, isFalse);
+        await r.c.retry();
+        expect(r.c.state.phase, EcgCapturePhase.waiting);
+        expect(r.t.calls.where((c) => c == 'prepare:right'), hasLength(2));
+        r.t.emitFrame(frame(seq: 3, progress: 3));
+        r.t.emitFrame(terminal(seq: 4, result: 6));
+        await r.settle();
+        await r.settle();
+        expect(r.c.state.phase, EcgCapturePhase.completed);
+        expect(r.saved.single.$1.status, EcgReadingStatus.inconclusive);
+        // No third attempt is offered.
+        await r.c.retry();
+        expect(r.t.calls.where((c) => c == 'prepare:right'), hasLength(2));
+      },
+    );
 
     test('a save failure never shows completed', () async {
       final r = Rig()..failSave = true;

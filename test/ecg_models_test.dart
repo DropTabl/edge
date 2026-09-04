@@ -28,17 +28,19 @@ void main() {
       expect(categoryFor(3, 51), EcgCategory.unreadable);
     });
 
-    test('code 4: possible AFib 51..99, AFib high HR 100..150, high HR 151..200',
-        () {
-      expect(categoryFor(4, 50), EcgCategory.unreadable);
-      expect(categoryFor(4, 51), EcgCategory.possibleAfib);
-      expect(categoryFor(4, 99), EcgCategory.possibleAfib);
-      expect(categoryFor(4, 100), EcgCategory.afibHighHeartRate);
-      expect(categoryFor(4, 150), EcgCategory.afibHighHeartRate);
-      expect(categoryFor(4, 151), EcgCategory.highHeartRate);
-      expect(categoryFor(4, 200), EcgCategory.highHeartRate);
-      expect(categoryFor(4, 201), EcgCategory.unreadable);
-    });
+    test(
+      'code 4: possible AFib 51..99, AFib high HR 100..150, high HR 151..200',
+      () {
+        expect(categoryFor(4, 50), EcgCategory.unreadable);
+        expect(categoryFor(4, 51), EcgCategory.possibleAfib);
+        expect(categoryFor(4, 99), EcgCategory.possibleAfib);
+        expect(categoryFor(4, 100), EcgCategory.afibHighHeartRate);
+        expect(categoryFor(4, 150), EcgCategory.afibHighHeartRate);
+        expect(categoryFor(4, 151), EcgCategory.highHeartRate);
+        expect(categoryFor(4, 200), EcgCategory.highHeartRate);
+        expect(categoryFor(4, 201), EcgCategory.unreadable);
+      },
+    );
 
     test('code 5: high HR no AFib 100..150, high HR 151..200', () {
       expect(categoryFor(5, 99), EcgCategory.unreadable);
@@ -81,7 +83,10 @@ void main() {
 
     test('reading rows round-trip', () {
       final r = EcgReading(
-        id: ecgReadingId(startEpochMs: 1787823754000, terminalStrapS: 1787823784),
+        id: ecgReadingId(
+          startEpochMs: 1787823754000,
+          terminalStrapS: 1787823784,
+        ),
         deviceId: '',
         wrist: EcgWrist.left,
         startTs: 1787823754,
@@ -121,18 +126,20 @@ void main() {
     test('min, max, rms and missing segments; placeholders add nothing', () {
       final stats = EcgWindowStats.of([
         EcgAcceptedPacket(
-            sequence: 1,
-            strapSeconds: 1,
-            strapSubsec: 0,
-            samples: Int16List.fromList([3, -4]),
-            inner: Uint8List(0)),
+          sequence: 1,
+          strapSeconds: 1,
+          strapSubsec: 0,
+          samples: Int16List.fromList([3, -4]),
+          inner: Uint8List(0),
+        ),
         EcgAcceptedPacket.placeholder(2),
         EcgAcceptedPacket(
-            sequence: 3,
-            strapSeconds: 3,
-            strapSubsec: 0,
-            samples: Int16List.fromList([0, 12]),
-            inner: Uint8List(0)),
+          sequence: 3,
+          strapSeconds: 3,
+          strapSubsec: 0,
+          samples: Int16List.fromList([0, 12]),
+          inner: Uint8List(0),
+        ),
       ]);
       expect(stats.sampleCount, 4);
       expect(stats.minUv, -4);

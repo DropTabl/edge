@@ -19,9 +19,9 @@ void main() {
     answer = true;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
-      calls.add(call.arguments['on'] as bool);
-      return answer;
-    });
+          calls.add(call.arguments['on'] as bool);
+          return answer;
+        });
   });
 
   tearDown(() {
@@ -30,30 +30,36 @@ void main() {
     ScreenWake.resetForTest();
   });
 
-  test('one owner releasing while another remains keeps the display held',
-      () async {
-    await ScreenWake.hold('workout');
-    await ScreenWake.hold('ecg');
-    expect(calls, [true], reason: 'the second hold is a no-op on the platform');
-    await ScreenWake.releaseOwner('workout');
-    expect(ScreenWake.isHeld, isTrue);
-    expect(calls, [true]);
-    await ScreenWake.releaseOwner('ecg');
-    expect(ScreenWake.isHeld, isFalse);
-    expect(calls, [true, false]);
-  });
+  test(
+    'one owner releasing while another remains keeps the display held',
+    () async {
+      await ScreenWake.hold('workout');
+      await ScreenWake.hold('ecg');
+      expect(calls, [
+        true,
+      ], reason: 'the second hold is a no-op on the platform');
+      await ScreenWake.releaseOwner('workout');
+      expect(ScreenWake.isHeld, isTrue);
+      expect(calls, [true]);
+      await ScreenWake.releaseOwner('ecg');
+      expect(ScreenWake.isHeld, isFalse);
+      expect(calls, [true, false]);
+    },
+  );
 
-  test('a failed enable leaves the owner recorded and the next transition retries',
-      () async {
-    answer = false;
-    await ScreenWake.hold('ecg');
-    expect(ScreenWake.isHeld, isFalse);
-    expect(ScreenWake.owners, {'ecg'});
-    answer = true;
-    await ScreenWake.hold('ecg');
-    expect(ScreenWake.isHeld, isTrue);
-    expect(calls, [true, true]);
-  });
+  test(
+    'a failed enable leaves the owner recorded and the next transition retries',
+    () async {
+      answer = false;
+      await ScreenWake.hold('ecg');
+      expect(ScreenWake.isHeld, isFalse);
+      expect(ScreenWake.owners, {'ecg'});
+      answer = true;
+      await ScreenWake.hold('ecg');
+      expect(ScreenWake.isHeld, isTrue);
+      expect(calls, [true, true]);
+    },
+  );
 
   test('concurrent hold/release resolve in order and never end held', () async {
     final a = ScreenWake.hold('ecg');

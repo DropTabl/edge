@@ -91,41 +91,37 @@ class EcgCaptureState {
     String? readingId,
     int? unreadableMask,
     bool? cleanupIncomplete,
-  }) =>
-      EcgCaptureState(
-        phase: phase ?? this.phase,
-        wrist: wrist ?? this.wrist,
-        progress: progress ?? this.progress,
-        liveHr: clearLiveHr ? null : (liveHr ?? this.liveHr),
-        quality: quality ?? this.quality,
-        interruptions: interruptions ?? this.interruptions,
-        reason: reason ?? this.reason,
-        readingId: readingId ?? this.readingId,
-        unreadableMask: unreadableMask ?? this.unreadableMask,
-        cleanupIncomplete: cleanupIncomplete ?? this.cleanupIncomplete,
-      );
+  }) => EcgCaptureState(
+    phase: phase ?? this.phase,
+    wrist: wrist ?? this.wrist,
+    progress: progress ?? this.progress,
+    liveHr: clearLiveHr ? null : (liveHr ?? this.liveHr),
+    quality: quality ?? this.quality,
+    interruptions: interruptions ?? this.interruptions,
+    reason: reason ?? this.reason,
+    readingId: readingId ?? this.readingId,
+    unreadableMask: unreadableMask ?? this.unreadableMask,
+    cleanupIncomplete: cleanupIncomplete ?? this.cleanupIncomplete,
+  );
 
   /// The phases in which the band may be generating: from the first ON
   /// write until cleanup finished.
   bool get capturing => switch (phase) {
-        EcgCapturePhase.recovering ||
-        EcgCapturePhase.preparing ||
-        EcgCapturePhase.starting ||
-        EcgCapturePhase.waiting ||
-        EcgCapturePhase.active ||
-        EcgCapturePhase.contactLost ||
-        EcgCapturePhase.restarting ||
-        EcgCapturePhase.saving ||
-        EcgCapturePhase.cleaningUp =>
-          true,
-        _ => false,
-      };
+    EcgCapturePhase.recovering ||
+    EcgCapturePhase.preparing ||
+    EcgCapturePhase.starting ||
+    EcgCapturePhase.waiting ||
+    EcgCapturePhase.active ||
+    EcgCapturePhase.contactLost ||
+    EcgCapturePhase.restarting ||
+    EcgCapturePhase.saving ||
+    EcgCapturePhase.cleaningUp => true,
+    _ => false,
+  };
 }
 
-typedef EcgSave = Future<void> Function(
-  EcgReading reading,
-  List<EcgAcceptedPacket> packets,
-);
+typedef EcgSave =
+    Future<void> Function(EcgReading reading, List<EcgAcceptedPacket> packets);
 
 class EcgController extends ChangeNotifier {
   final EcgTransport transport;
@@ -153,8 +149,8 @@ class EcgController extends ChangeNotifier {
     void Function(String)? log,
     this.captureTimeout = const Duration(seconds: 120),
     int Function()? nowMs,
-  })  : log = log ?? ((_) {}),
-        nowMs = nowMs ?? (() => DateTime.now().millisecondsSinceEpoch);
+  }) : log = log ?? ((_) {}),
+       nowMs = nowMs ?? (() => DateTime.now().millisecondsSinceEpoch);
 
   EcgCaptureState _state = const EcgCaptureState();
   EcgCaptureState get state => _state;
@@ -208,20 +204,35 @@ class EcgController extends ChangeNotifier {
     }
     final busy = busyReason();
     if (busy != null) {
-      _set(EcgCaptureState(
-          phase: EcgCapturePhase.busy, wrist: wrist, reason: busy));
+      _set(
+        EcgCaptureState(
+          phase: EcgCapturePhase.busy,
+          wrist: wrist,
+          reason: busy,
+        ),
+      );
       return;
     }
     final serial = transport.serial;
     if (serial == null || serial.isEmpty) {
-      _set(EcgCaptureState(
-          phase: EcgCapturePhase.failed, wrist: wrist, reason: 'no_serial'));
+      _set(
+        EcgCaptureState(
+          phase: EcgCapturePhase.failed,
+          wrist: wrist,
+          reason: 'no_serial',
+        ),
+      );
       return;
     }
     final lease = transport.acquire();
     if (lease == null) {
-      _set(EcgCaptureState(
-          phase: EcgCapturePhase.busy, wrist: wrist, reason: 'transport'));
+      _set(
+        EcgCaptureState(
+          phase: EcgCapturePhase.busy,
+          wrist: wrist,
+          reason: 'transport',
+        ),
+      );
       return;
     }
     _lease = lease;
@@ -345,11 +356,13 @@ class EcgController extends ChangeNotifier {
     switch (e) {
       case EcgTransportLinkDown():
         unawaited(
-            _finish(epoch, EcgCapturePhase.failed, reason: 'disconnected'));
+          _finish(epoch, EcgCapturePhase.failed, reason: 'disconnected'),
+        );
       case EcgTransportMalformed():
         if (_armed) {
           unawaited(
-              _finish(epoch, EcgCapturePhase.failed, reason: 'malformed'));
+            _finish(epoch, EcgCapturePhase.failed, reason: 'malformed'),
+          );
         }
       case EcgTransportFrame():
         _onFrame(epoch, e);
@@ -426,8 +439,11 @@ class EcgController extends ChangeNotifier {
     _timer?.cancel();
     switch (outcome.kind) {
       case EcgTerminalKind.unreadable:
-        await _finish(epoch, EcgCapturePhase.unreadable,
-            unreadableMask: outcome.unreadableMask);
+        await _finish(
+          epoch,
+          EcgCapturePhase.unreadable,
+          unreadableMask: outcome.unreadableMask,
+        );
       case EcgTerminalKind.inconclusiveOfferRetry:
         await _finish(epoch, EcgCapturePhase.inconclusiveRetry);
       case EcgTerminalKind.completed:
@@ -528,12 +544,14 @@ class EcgController extends ChangeNotifier {
     }
     transport.release(lease);
     if (identical(_lease, lease)) _lease = null;
-    _set(_state.copyWith(
-      phase: phase,
-      reason: reason,
-      readingId: readingId,
-      unreadableMask: unreadableMask,
-      cleanupIncomplete: incomplete,
-    ));
+    _set(
+      _state.copyWith(
+        phase: phase,
+        reason: reason,
+        readingId: readingId,
+        unreadableMask: unreadableMask,
+        cleanupIncomplete: incomplete,
+      ),
+    );
   }
 }

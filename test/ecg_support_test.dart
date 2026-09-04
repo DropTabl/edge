@@ -58,44 +58,54 @@ void main() {
   });
 
   group('PrefsEcgGuardStore', () {
-    test('guard, wrist and remembered-MG flag are per serial and durable', () async {
-      SharedPreferences.setMockInitialValues({});
-      final g = PrefsEcgGuardStore();
-      expect(await g.isActive('A'), isFalse);
-      expect(await g.setActive('A'), isTrue);
-      expect(await g.isActive('A'), isTrue);
-      expect(await g.isActive('B'), isFalse);
-      expect(await g.clear('A'), isTrue);
-      expect(await g.isActive('A'), isFalse);
-      await g.setWrist('A', EcgWrist.left);
-      expect(await g.wrist('A'), EcgWrist.left);
-      expect(await g.wrist('B'), isNull);
-      expect(await g.isRememberedMaverick('A'), isFalse);
-      await g.rememberMaverick('A');
-      expect(await g.isRememberedMaverick('A'), isTrue);
-      final raw = await SharedPreferences.getInstance();
-      expect(raw.getBool('ecg.maverick.A'), isTrue);
-      expect(raw.getString('ecg.wrist.A'), 'left');
-    });
+    test(
+      'guard, wrist and remembered-MG flag are per serial and durable',
+      () async {
+        SharedPreferences.setMockInitialValues({});
+        final g = PrefsEcgGuardStore();
+        expect(await g.isActive('A'), isFalse);
+        expect(await g.setActive('A'), isTrue);
+        expect(await g.isActive('A'), isTrue);
+        expect(await g.isActive('B'), isFalse);
+        expect(await g.clear('A'), isTrue);
+        expect(await g.isActive('A'), isFalse);
+        await g.setWrist('A', EcgWrist.left);
+        expect(await g.wrist('A'), EcgWrist.left);
+        expect(await g.wrist('B'), isNull);
+        expect(await g.isRememberedMaverick('A'), isFalse);
+        await g.rememberMaverick('A');
+        expect(await g.isRememberedMaverick('A'), isTrue);
+        final raw = await SharedPreferences.getInstance();
+        expect(raw.getBool('ecg.maverick.A'), isTrue);
+        expect(raw.getString('ecg.wrist.A'), 'left');
+      },
+    );
   });
 
   group('ecgRecoverRetainedGuard', () {
     EcgCommandListResult ok() => const EcgCommandListResult([
-          EcgMemberOutcome('generationStop', written: true, succeeded: true),
-          EcgMemberOutcome('filteredOff', written: true, succeeded: true),
-          EcgMemberOutcome('rawSaveOff', written: true, succeeded: true),
-        ]);
+      EcgMemberOutcome('generationStop', written: true, succeeded: true),
+      EcgMemberOutcome('filteredOff', written: true, succeeded: true),
+      EcgMemberOutcome('rawSaveOff', written: true, succeeded: true),
+    ]);
     EcgCommandListResult partial() => const EcgCommandListResult([
-          EcgMemberOutcome('generationStop', written: true, succeeded: true),
-          EcgMemberOutcome('filteredOff', written: true, succeeded: false),
-          EcgMemberOutcome('rawSaveOff', written: true, succeeded: true),
-        ]);
+      EcgMemberOutcome('generationStop', written: true, succeeded: true),
+      EcgMemberOutcome('filteredOff', written: true, succeeded: false),
+      EcgMemberOutcome('rawSaveOff', written: true, succeeded: true),
+    ]);
 
     test('no guard → nothing sent', () async {
       final g = MemoryEcgGuardStore();
       var sent = 0;
       final r = await ecgRecoverRetainedGuard(
-          guard: g, serial: 'S', cleanup: () async { sent++; return ok(); }, log: (_) {});
+        guard: g,
+        serial: 'S',
+        cleanup: () async {
+          sent++;
+          return ok();
+        },
+        log: (_) {},
+      );
       expect(r, EcgRecoveryOutcome.noGuard);
       expect(sent, 0);
     });
@@ -103,7 +113,11 @@ void main() {
     test('a retained guard runs cleanup; all-success clears it', () async {
       final g = MemoryEcgGuardStore()..active.add('S');
       final r = await ecgRecoverRetainedGuard(
-          guard: g, serial: 'S', cleanup: () async => ok(), log: (_) {});
+        guard: g,
+        serial: 'S',
+        cleanup: () async => ok(),
+        log: (_) {},
+      );
       expect(r, EcgRecoveryOutcome.cleared);
       expect(g.active, isEmpty);
     });
@@ -111,7 +125,11 @@ void main() {
     test('a failed member retains the guard', () async {
       final g = MemoryEcgGuardStore()..active.add('S');
       final r = await ecgRecoverRetainedGuard(
-          guard: g, serial: 'S', cleanup: () async => partial(), log: (_) {});
+        guard: g,
+        serial: 'S',
+        cleanup: () async => partial(),
+        log: (_) {},
+      );
       expect(r, EcgRecoveryOutcome.retained);
       expect(g.active, contains('S'));
     });
@@ -119,7 +137,11 @@ void main() {
     test('no serial → nothing happens', () async {
       final g = MemoryEcgGuardStore()..active.add('S');
       final r = await ecgRecoverRetainedGuard(
-          guard: g, serial: null, cleanup: () async => ok(), log: (_) {});
+        guard: g,
+        serial: null,
+        cleanup: () async => ok(),
+        log: (_) {},
+      );
       expect(r, EcgRecoveryOutcome.noSerial);
       expect(g.active, contains('S'));
     });

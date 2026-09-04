@@ -721,6 +721,11 @@ class CoachEngine {
               await LocalDb.instance, args['date']);
         case 'get_medications':
           return await CoachActions.medications(await LocalDb.instance);
+        // data — one saved ECG reading, by id. Bound query + bounded envelope;
+        // the packet tables stay unreachable through run_sql.
+        case 'get_ecg_reading':
+          return await CoachActions.ecgReading(
+              await LocalDb.instance, args['reading_id']);
 
         // plot — legacy bar/line/area figure
         case 'plot_chart':
@@ -899,7 +904,13 @@ class CoachEngine {
         'calendar day; filter "today\'s workout" by date, never by converting '
         'start_ts/end_ts yourself; '
         'v_baselines(key,value,mean,z,delta,ratio,n,updated_at); '
-        'v_insights(id,kind,title,body,date,created_at,read). '
+        'v_insights(id,kind,title,body,date,created_at,read); '
+        'v_ecg_readings(id,start_ts,end_ts,date,wrist,status,category,'
+        'result_code,avg_hr,quality,unreadable_mask,interruptions,duration_s,'
+        'sample_count,sample_rate_hz,sample_unit,min_uv,max_uv,rms_uv,'
+        'missing_segments) — WHOOP MG ECG readings, SUMMARY only (the '
+        'category is the band\'s own result); the waveform is in '
+        'get_ecg_reading. '
         'Read-only, derived only — no other tables. Dates are \'YYYY-MM-DD\'; '
         'timestamps are epoch seconds. Prefer aggregates (AVG/MIN/MAX/COUNT) over '
         'SELECT *. Results are capped at 200 rows.',
@@ -940,6 +951,16 @@ class CoachEngine {
     _fn('get_medications',
         'Read the medication/supplement schedule and today\'s doses '
         '(taken/skipped/missed/upcoming). Not in run_sql — use this.', {}),
+    _fn('get_ecg_reading',
+        'Read ONE saved WHOOP MG ECG reading by id: local time, status, the '
+        'BAND-REPORTED category and result code, average HR, signal quality, '
+        'unreadable reasons, duration, sample count, missing segments, '
+        'min/max/RMS, and a bounded (~300-bucket) min/max waveform envelope '
+        'in microvolts. Never returns raw frames, a band serial or all '
+        'samples. The category is the band\'s HeartKey result — you must '
+        'not diagnose from the envelope.',
+        {'reading_id': {'type': 'string', 'description': 'the reading id from v_ecg_readings'}},
+        ['reading_id']),
     _fn('log_food',
         'Log something eaten (asks the user to confirm). EVERY nutrient is '
         'optional: an eating occasion with no numbers is a complete log, and '

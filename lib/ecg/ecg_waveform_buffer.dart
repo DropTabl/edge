@@ -19,7 +19,7 @@ class EcgWaveformBuffer {
   int _version = 0;
 
   EcgWaveformBuffer({int capacity = defaultCapacity})
-      : _ring = Int16List(capacity);
+    : _ring = Int16List(capacity);
 
   int get capacity => _ring.length;
 

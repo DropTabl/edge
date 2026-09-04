@@ -40,8 +40,11 @@ class EcgMemberOutcome {
   final String label;
   final bool written;
   final bool succeeded;
-  const EcgMemberOutcome(this.label,
-      {required this.written, required this.succeeded});
+  const EcgMemberOutcome(
+    this.label, {
+    required this.written,
+    required this.succeeded,
+  });
 
   @override
   String toString() => '$label(written=$written ok=$succeeded)';
@@ -53,8 +56,10 @@ class EcgCommandListResult {
 
   bool get allSucceeded =>
       outcomes.isNotEmpty && outcomes.every((o) => o.succeeded);
-  List<EcgMemberOutcome> get failed =>
-      [for (final o in outcomes) if (!o.succeeded) o];
+  List<EcgMemberOutcome> get failed => [
+    for (final o in outcomes)
+      if (!o.succeeded) o,
+  ];
 
   @override
   String toString() => outcomes.join(', ');
