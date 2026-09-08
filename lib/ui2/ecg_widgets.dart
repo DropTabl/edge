@@ -19,8 +19,8 @@ import 'theme.dart';
 /// The band on the selected wrist, both electrode indents, and the opposite
 /// hand's thumb and index finger touching them, with soft contact rings.
 /// [t] is the pulse phase in [0, 1) — the SCREEN owns the clock; a frozen
-/// [t] is a still illustration under reduced motion. [contact] draws the
-/// fingers on the electrodes; otherwise they approach.
+/// [t] is a still illustration under reduced motion. The pinch stays in place;
+/// [contact] settles the electrode halos once the band detects both fingers.
 class EcgTouchIllustration extends StatelessWidget {
   final EcgWrist wrist;
   final double t;
@@ -79,92 +79,180 @@ class _TouchPainter extends CustomPainter {
 
   @override
   void paint(Canvas cv, Size s) {
-    final w = s.width, h = s.height;
-    // Mirror for the left wrist: the forearm enters from the other side.
-    final mirror = wrist == EcgWrist.left;
+    // A fixed drawing space preserves the hand's proportions on narrow phones.
+    final scale = math.min(s.width / 360, s.height / 200);
     cv.save();
-    if (mirror) {
-      cv.translate(w, 0);
+    cv.clipRect(Offset.zero & s);
+    // Mirror the entire composition, including the opposite hand.
+    if (wrist == EcgWrist.left) {
+      cv.translate(s.width, 0);
       cv.scale(-1, 1);
     }
-    final stroke = Paint()
+    cv.translate((s.width - 360 * scale) / 2, (s.height - 200 * scale) / 2);
+    cv.scale(scale);
+    final outline = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.5
+      ..strokeWidth = 2.2
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
       ..color = ink2;
     final fill = Paint()..color = skin;
-
-    // Resting forearm: a rounded slab from the left edge to the wrist.
-    final armTop = h * .42, armBot = h * .70;
-    final armEnd = w * .58;
-    final arm = RRect.fromLTRBR(
-      -20,
-      armTop,
-      armEnd,
-      armBot,
-      Radius.circular((armBot - armTop) / 2),
-    );
-    cv.drawRRect(arm, fill);
-    cv.drawRRect(arm, stroke);
-
-    // The band around the wrist, with its two electrode indents on the
-    // outer face (top and bottom edges of the strap).
-    final bx = w * .46, bw = w * .07;
-    final bandRect = RRect.fromLTRBR(
-      bx,
-      armTop - 6,
-      bx + bw,
-      armBot + 6,
-      const Radius.circular(6),
-    );
-    cv.drawRRect(bandRect, Paint()..color = band);
-    final electrodePaint = Paint()..color = accent;
-    final e1 = Offset(bx + bw / 2, armTop - 6);
-    final e2 = Offset(bx + bw / 2, armBot + 6);
-    cv.drawCircle(e1, 4, electrodePaint);
-    cv.drawCircle(e2, 4, electrodePaint);
-
-    // Opposite hand: thumb from above, index finger from below, meeting the
-    // two indents. Before contact they hover at a small gap that eases in
-    // with the phase.
-    final gap = contact ? 0.0 : 10.0 + 6.0 * math.sin(t * 2 * math.pi);
-    final finger = Paint()
+    final crease = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 14
+      ..strokeWidth = 1.4
       ..strokeCap = StrokeCap.round
-      ..color = skin;
-    final fingerLine = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 14
-      ..strokeCap = StrokeCap.round
-      ..color = ink2
-      ..strokeWidth = 16;
-    // Thumb.
-    final thumbTip = Offset(e1.dx, e1.dy - 8 - gap);
-    final thumbBase = Offset(w * .82, h * .08);
-    cv.drawLine(thumbBase, thumbTip, fingerLine);
-    cv.drawLine(thumbBase, thumbTip, finger);
-    // Index finger.
-    final indexTip = Offset(e2.dx, e2.dy + 8 + gap);
-    final indexBase = Offset(w * .86, h * .95);
-    cv.drawLine(indexBase, indexTip, fingerLine);
-    cv.drawLine(indexBase, indexTip, finger);
+      ..color = ink2.withValues(alpha: .65);
 
-    // Contact rings: gentle pulses out of each electrode.
-    final ringPaint = Paint()
+    // Resting arm: tapered wrist, then the heel and softly curled fingers of
+    // the wearing hand. These contours remain behind the pinching hand.
+    final arm = Path()
+      ..moveTo(-12, 98)
+      ..cubicTo(44, 98, 94, 108, 129, 108)
+      ..cubicTo(156, 108, 172, 99, 187, 101)
+      ..cubicTo(205, 102, 217, 113, 227, 122)
+      ..cubicTo(237, 130, 247, 133, 247, 142)
+      ..cubicTo(247, 149, 240, 152, 232, 150)
+      ..cubicTo(236, 163, 225, 170, 213, 165)
+      ..cubicTo(193, 160, 175, 150, 151, 150)
+      ..cubicTo(110, 149, 49, 172, -12, 171)
+      ..close();
+    cv.drawPath(arm, fill);
+    cv.drawPath(arm, outline);
+    cv.drawPath(
+      Path()
+        ..moveTo(179, 116)
+        ..quadraticBezierTo(192, 113, 202, 123)
+        ..lineTo(224, 144)
+        ..quadraticBezierTo(230, 150, 236, 150)
+        ..moveTo(196, 143)
+        ..quadraticBezierTo(204, 155, 218, 157),
+      crease,
+    );
+
+    // Wide fabric wrap with a raised, screenless capsule. Short cross-lines
+    // suggest the woven strap; the two inset metal pads sit on opposing edges.
+    cv.drawRRect(
+      RRect.fromRectAndRadius(
+        const Rect.fromLTWH(118, 99, 60, 64),
+        const Radius.circular(11),
+      ),
+      Paint()..color = band,
+    );
+    final weave = Paint()
+      ..color = skin.withValues(alpha: .35)
+      ..strokeWidth = 1;
+    for (var y = 104.0; y <= 156; y += 5) {
+      cv.drawLine(Offset(122, y), Offset(174, y), weave);
+    }
+    final capsule = RRect.fromRectAndRadius(
+      const Rect.fromLTWH(126, 94, 45, 64),
+      const Radius.circular(12),
+    );
+    cv.drawRRect(capsule, Paint()..color = band);
+    cv.drawPath(
+      Path()
+        ..moveTo(137, 103)
+        ..quadraticBezierTo(132, 104, 132, 111)
+        ..lineTo(132, 141)
+        ..moveTo(165, 111)
+        ..lineTo(165, 141)
+        ..quadraticBezierTo(165, 148, 160, 149),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..color = skin.withValues(alpha: .5),
+    );
+    final metal = Paint()..color = Color.lerp(skin, ink2, .35)!;
+    for (final y in [91.0, 153.0]) {
+      cv.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(138, y, 21, 8),
+          const Radius.circular(4),
+        ),
+        metal,
+      );
+    }
+
+    // One continuous opposite-hand silhouette: bent index above, palm and
+    // wrist at the right, and a shorter, broader thumb below. The open web
+    // between index and thumb exposes the band and the resting wrist.
+    final hand = Path()
+      ..moveTo(372, 68)
+      ..lineTo(306, 68)
+      ..cubicTo(289, 68, 278, 52, 260, 44)
+      ..cubicTo(237, 33, 207, 30, 185, 38)
+      ..cubicTo(164, 45, 145, 61, 139, 79)
+      ..cubicTo(135, 89, 140, 94, 148, 94)
+      ..cubicTo(155, 94, 159, 89, 163, 82)
+      ..cubicTo(172, 68, 190, 60, 207, 60)
+      ..cubicTo(225, 60, 241, 71, 250, 88)
+      ..cubicTo(259, 104, 260, 120, 249, 134)
+      ..cubicTo(238, 148, 216, 158, 194, 159)
+      ..cubicTo(177, 160, 166, 151, 153, 156)
+      ..cubicTo(144, 159, 144, 168, 151, 173)
+      ..cubicTo(165, 184, 189, 187, 211, 183)
+      ..cubicTo(238, 179, 262, 169, 283, 156)
+      ..quadraticBezierTo(299, 147, 317, 149)
+      ..lineTo(372, 159)
+      ..close();
+    cv.drawPath(hand, fill);
+    cv.drawPath(hand, outline);
+
+    // Nails at the two tips, finger-joint folds and the thumb's thenar crease
+    // give the pinch anatomical cues without competing with the contact pads.
+    cv.drawPath(
+      Path()
+        ..moveTo(143, 80)
+        ..quadraticBezierTo(144, 73, 150, 69)
+        ..quadraticBezierTo(156, 70, 158, 75)
+        ..lineTo(152, 85)
+        ..quadraticBezierTo(146, 87, 143, 80)
+        ..moveTo(153, 164)
+        ..quadraticBezierTo(160, 159, 170, 164)
+        ..lineTo(174, 172)
+        ..quadraticBezierTo(162, 175, 155, 170)
+        ..moveTo(181, 44)
+        ..quadraticBezierTo(187, 48, 189, 54)
+        ..moveTo(226, 43)
+        ..quadraticBezierTo(224, 48, 225, 52)
+        ..moveTo(200, 166)
+        ..quadraticBezierTo(202, 171, 201, 176)
+        ..moveTo(271, 114)
+        ..cubicTo(280, 133, 263, 151, 245, 158)
+        ..moveTo(308, 81)
+        ..quadraticBezierTo(300, 91, 303, 103),
+      crease,
+    );
+
+    // Always-visible targets teach the same pose at every frozen phase. A
+    // seamless, gentle breath draws attention before contact; then it settles.
+    final pulse = .5 - .5 * math.cos(t * 2 * math.pi);
+    final radius = contact ? 8.0 : 10.0 + 4 * pulse;
+    final halo = Paint()
+      ..color = accent.withValues(alpha: contact ? .12 : .10 + .06 * pulse);
+    final ring = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..color = accent.withValues(alpha: (1 - t) * .8);
-    final r = 6 + 16 * t;
-    cv.drawCircle(e1, r, ringPaint);
-    cv.drawCircle(e2, r, ringPaint);
+      ..strokeWidth = contact ? 1.5 : 1.8
+      ..color = accent.withValues(alpha: contact ? .55 : .45 + .25 * pulse);
+    for (final point in [const Offset(148, 95), const Offset(148, 157)]) {
+      cv.drawCircle(point, radius, halo);
+      cv.drawCircle(point, radius, ring);
+      cv.drawCircle(point, 4, Paint()..color = ink);
+      cv.drawCircle(point, 2.6, Paint()..color = accent);
+    }
     cv.restore();
   }
 
   @override
   bool shouldRepaint(_TouchPainter o) =>
-      o.t != t || o.contact != contact || o.wrist != wrist || o.ink != ink;
+      o.t != t ||
+      o.contact != contact ||
+      o.wrist != wrist ||
+      o.ink != ink ||
+      o.ink2 != ink2 ||
+      o.band != band ||
+      o.accent != accent ||
+      o.skin != skin;
 }
 
 /// The live preview: the newest few seconds of real samples, a stable
