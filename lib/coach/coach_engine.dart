@@ -975,8 +975,8 @@ class CoachEngine {
         'own sample rate (null where a segment is missing; a window too long '
         'for one result is decimated by a whole-number stride, reported as '
         '`stride`). Never returns raw frames, a band serial or the notes. The '
-        'category is the band\'s HeartKey result — you must not diagnose from '
-        'the waveform.',
+        'category is the band\'s HeartKey result, not yours; you may read the '
+        'waveform yourself and say if you disagree with it.',
         {'reading_id': {'type': 'string', 'description': 'the reading id from v_ecg_readings'}},
         ['reading_id']),
     _fn('log_food',

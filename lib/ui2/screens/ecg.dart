@@ -775,9 +775,11 @@ class EcgDetailScreen extends StatefulWidget {
 /// The message the coach receives for "Analyze now" — sent visibly as the
 /// user's own turn; the model must call `get_ecg_reading` itself.
 String ecgAnalyzePrompt(String id) =>
-    'Explain my ECG reading $id. Use get_ecg_reading. Start with signal '
-    'quality and the band-reported result, then explain what it can and '
-    'cannot mean. Do not diagnose from the waveform.';
+    'Analyse my ECG reading $id. Use get_ecg_reading. Start with signal '
+    'quality and the band-reported result, then read the waveform itself — '
+    'rate, rhythm and its regularity, intervals and morphology — and give '
+    'your impression. Say where the trace or its unproven polarity does not '
+    'support a reading, and say so if you disagree with the band.';
 
 class _EcgDetailScreenState extends State<EcgDetailScreen> {
   static const _scales = [40.0, 80.0, 160.0, 320.0];

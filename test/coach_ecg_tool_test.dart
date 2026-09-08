@@ -241,7 +241,11 @@ void main() {
     expect(kCoachSystemPrompt, contains('get_ecg_reading'));
     expect(kCoachSystemPrompt, contains('v_ecg_readings'));
     expect(kCoachSystemPrompt, contains('HeartKey'));
-    expect(kCoachSystemPrompt, contains('must NOT'));
+    expect(
+      kCoachSystemPrompt,
+      contains('not a cleared diagnostic device'),
+      reason: 'interpretation is allowed; the standing caveat is not',
+    );
     expect(kCoachSystemPrompt, contains('Not medical advice'));
     expect(kCoachSystemPrompt.toLowerCase(), contains('polarity'));
     expect(kCoachSystemPrompt.toLowerCase(), contains('emergency'));

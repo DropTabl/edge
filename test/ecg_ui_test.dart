@@ -485,11 +485,16 @@ void main() {
   });
 
   group('analyze-now prompt', () {
-    test('names the tool and forbids diagnosing from the waveform', () {
+    test('names the tool and asks for a reading of the waveform', () {
       final p = ecgAnalyzePrompt('ecg_1');
-      expect(p, contains('Explain my ECG reading ecg_1'));
+      expect(p, contains('Analyse my ECG reading ecg_1'));
       expect(p, contains('Use get_ecg_reading'));
-      expect(p, contains('Do not diagnose from the waveform'));
+      expect(p, contains('rate, rhythm'));
+      expect(
+        p,
+        contains('polarity'),
+        reason: 'the unproven polarity is still stated',
+      );
     });
   });
 
