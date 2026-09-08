@@ -223,6 +223,21 @@ class AppState extends ChangeNotifier {
   // "last data: …" indicator must show. Seeded from the DB at init, advanced as
   // records (drained + live) flow in.
   int? _lastRecTs;
+
+  /// "Delete everything" is in progress — refuse every record ingest path.
+  ///
+  /// [resetAllData] wipes the database but leaves the band CONNECTED: its own
+  /// documented order puts `signOut` (and the `unpair` inside it) last, because
+  /// that flips the route and unwinds the UI. So the strap keeps handing over
+  /// historical records across the wipe, and one landing after it is written
+  /// into the fresh database and re-advertised as the data edge — the deleted
+  /// installation, visible again, with nothing left to explain it.
+  ///
+  /// A refusal flag rather than a reordering: the ordering above is deliberate
+  /// and load-bearing, and tearing the link down first is a change to the
+  /// connection lifecycle, not to the wipe. Nothing is lost by refusing — the
+  /// band has not been ACKed for these records, so they are still on it.
+  bool _resetting = false;
   final List<String> logLines = [];
   bool busy = false;
 
@@ -1011,59 +1026,69 @@ class AppState extends ChangeNotifier {
   ///      that could re-create state are all downstream of the writes.
   ///   3. [signOut] last, because it flips the route and the UI unwinds.
   Future<void> resetAllData() async {
-    // 1 · nothing further leaves this phone, starting now.
-    telemetryConsent = false;
-    healthShareConsent = false;
-    consentChosen = false;
-    TelemetryService.instance.applyConsent(false);
-    HealthUploader.instance.deviceId = null; // maybeUpload bails without one
-    deviceId = '';
-
-    // 2 · every row in every table (see LocalDb.wipeAll for why it is not a
-    // hand-written table list, and for the sync_cursor decision).
-    await LocalDb.wipeAll();
-
-    // Surfaces outside the database that were still showing it.
-    await NotificationService.instance.cancelAll();
-    await WidgetService.clear();
+    // 0 · nothing further ENTERS the database either. The band is still
+    //     connected and still draining — see [_resetting].
+    _resetting = true;
     try {
-      await coachConfig?.save(apiKey: ''); // deletes the keychain entry
-    } catch (e) {
-      _log('[reset] keychain clear failed: $e');
+      // 1 · nothing further leaves this phone, starting now.
+      telemetryConsent = false;
+      healthShareConsent = false;
+      consentChosen = false;
+      TelemetryService.instance.applyConsent(false);
+      HealthUploader.instance.deviceId = null; // maybeUpload bails without one
+      deviceId = '';
+
+      // 2 · every row in every table (see LocalDb.wipeAll for why it is not a
+      // hand-written table list, and for the sync_cursor decision).
+      await LocalDb.wipeAll();
+
+      // Surfaces outside the database that were still showing it.
+      await NotificationService.instance.cancelAll();
+      await WidgetService.clear();
+      try {
+        await coachConfig?.save(apiKey: ''); // deletes the keychain entry
+      } catch (e) {
+        _log('[reset] keychain clear failed: $e');
+      }
+
+      // 3 · the whole preference namespace, not a remembered subset — same
+      // reason as wipeAll. A fresh install is the state being restored, and a
+      // fresh install has no preferences. The install id regenerates on the next
+      // launch, which is the point: the old anonymous id must not follow the
+      // user through a "delete everything".
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.clear();
+      } catch (e) {
+        _log('[reset] prefs clear failed: $e');
+      }
+      appStatus = null;
+      _savedAlarm = null;
+
+      // 4 · the in-memory mirrors of what we just deleted. These are plain
+      // fields, restored only by the profile load at launch, so leaving them
+      // alone kept both features RUNNING against the wiped database for the rest
+      // of the session — a re-pair without a relaunch would find phone steps
+      // still on and health export still syncing, which is not "a fresh install".
+      healthSyncEnabled = false;
+      healthState = HealthLinkState.unknown;
+      phoneStepsEnabled = false;
+      phoneStepsToday = 0;
+      _phoneStepsDay = null;
+      // The data edge, for the same reason. It only ever moves FORWARD, so a
+      // wipe that left it set meant a re-pair without a relaunch showed the
+      // deleted install's "Synced through …" — and no amount of syncing the new
+      // band could pull the label back to the truth.
+      _lastRecTs = null;
+      lastSynced = null;
+
+      // signOut() unpairs, so by the time it returns nothing is delivering.
+      await signOut();
+    } finally {
+      // Never leave ingest refused if the reset threw part-way: a half-reset
+      // install that silently drops every record is worse than the race.
+      _resetting = false;
     }
-
-    // 3 · the whole preference namespace, not a remembered subset — same
-    // reason as wipeAll. A fresh install is the state being restored, and a
-    // fresh install has no preferences. The install id regenerates on the next
-    // launch, which is the point: the old anonymous id must not follow the
-    // user through a "delete everything".
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.clear();
-    } catch (e) {
-      _log('[reset] prefs clear failed: $e');
-    }
-    appStatus = null;
-    _savedAlarm = null;
-
-    // 4 · the in-memory mirrors of what we just deleted. These are plain
-    // fields, restored only by the profile load at launch, so leaving them
-    // alone kept both features RUNNING against the wiped database for the rest
-    // of the session — a re-pair without a relaunch would find phone steps
-    // still on and health export still syncing, which is not "a fresh install".
-    healthSyncEnabled = false;
-    healthState = HealthLinkState.unknown;
-    phoneStepsEnabled = false;
-    phoneStepsToday = 0;
-    _phoneStepsDay = null;
-    // The data edge, for the same reason. It only ever moves FORWARD, so a
-    // wipe that left it set meant a re-pair without a relaunch showed the
-    // deleted install's "Synced through …" — and no amount of syncing the new
-    // band could pull the label back to the truth.
-    _lastRecTs = null;
-    lastSynced = null;
-
-    await signOut();
   }
 
   /// The single onboarding/route the UI gate is in. `_Gate` selects on THIS so it
@@ -1225,7 +1250,12 @@ class AppState extends ChangeNotifier {
       // engine's callback shape for a value it does not have.
       onEvent: (id, ts, hex) =>
           _onLiveEvent(id, ts, hex, LocalDb.kPrimaryDeviceId),
-      onRecordsBatch: LocalDb.insertRecordsBatch,
+      // Gated for the same reason as [_onRecord] — this one is wired straight
+      // to LocalDb, so it bypasses every check AppState makes.
+      onRecordsBatch: (raws, samples) async {
+        if (_resetting) return; // see [_resetting]
+        await LocalDb.insertRecordsBatch(raws, samples);
+      },
       // RESUMABLE SYNC: atomic commit of decoded rows + continuation cursor
       // before the HISTORY_END ACK, and a reader to seed the offload frontier
       // from the durable high-water on (re)connect. Routed through BandHost
@@ -2792,14 +2822,20 @@ class AppState extends ChangeNotifier {
   // Historical singles only now (live frames go through _onLiveFrame and are
   // never persisted). Just write the raw record (+ optional decoded sample).
   Future<void> _onRecord(Sample? sample, RawRecord raw) async {
+    if (_resetting) return; // see [_resetting]
     final ts = raw.recTs ?? sample?.tsEpoch;
-    await LocalDb.insertRecord(raw, sample);
-    // AFTER the write, not before it. `_lastRecTs` is the DATA EDGE — what is
-    // banked — and it only ever moves forward, so advancing it first meant a
-    // failed insert advertised a record the database does not hold, for the
-    // rest of the process. Now surfaced on Home ("Synced through …"), where
-    // claiming data we do not have is the one thing the line must not do.
-    if (ts != null && ts > 0 && ts > (_lastRecTs ?? 0)) _lastRecTs = ts;
+    // AFTER the write, and gated on the write SAYING it wrote. `_lastRecTs` is
+    // the DATA EDGE — what is banked — and it only ever moves forward, so
+    // advancing it first meant a failed insert advertised a record the
+    // database does not hold, for the rest of the process. Now surfaced on
+    // Home ("Synced through …"), where claiming data we do not have is the one
+    // thing the line must not do. `insertRecord` returns false rather than
+    // throwing if it ever stops committing; today it can only return true or
+    // throw, and reading the result costs nothing to keep that honest.
+    final inserted = await LocalDb.insertRecord(raw, sample);
+    if (inserted && ts != null && ts > 0 && ts > (_lastRecTs ?? 0)) {
+      _lastRecTs = ts;
+    }
   }
 
   // Ephemeral live high-rate frame (0x28/0x2B/0x33) — NOT persisted. The
