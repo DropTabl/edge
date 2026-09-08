@@ -54,6 +54,20 @@ bool coachReady(BuildContext c) {
   }
 }
 
+/// [coachReady] for an event handler, which must not listen.
+///
+/// `watch` outside `build` trips a provider assert, and the catch above turns
+/// that into a plain "not configured" — so a tap handler asking [coachReady]
+/// sends a fully configured user to the setup form every time.
+bool coachReadyNow(BuildContext c) {
+  try {
+    final cfg = c.read<CoachConfig>();
+    return cfg.configured || cfg.keyUnreadable;
+  } catch (_) {
+    return false;
+  }
+}
+
 /// What the Profile row should say under "AI coach", or null when there is no
 /// [CoachConfig] above this context at all.
 ///

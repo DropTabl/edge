@@ -8,12 +8,15 @@ import 'dart:ui' show PictureRecorder;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openstrap_edge/coach/coach_config.dart';
 import 'package:openstrap_edge/ecg/ecg_controller.dart';
 import 'package:openstrap_edge/ecg/ecg_models.dart';
 import 'package:openstrap_edge/ecg/ecg_waveform_buffer.dart';
 import 'package:openstrap_edge/l10n/app_localizations.dart';
 import 'package:openstrap_edge/ui2/screens/ecg.dart';
 import 'package:openstrap_edge/ui2/ui2.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 Future<void> _pump(
   WidgetTester t,
@@ -432,6 +435,55 @@ void main() {
     });
   });
 
+  group('analyze now with a configured coach', () {
+    // A tap handler must not `watch` a provider: provider asserts outside
+    // build and the predicate's own catch swallows it, so the gate reads
+    // "not configured" no matter what the user has set up.
+    testWidgets(
+      'goes to the coach, not back to setup',
+      (t) async {
+        SharedPreferences.setMockInitialValues({});
+        final cfg = CoachConfig();
+        await cfg.save(
+          baseUrl: 'http://localhost:11434/v1',
+          apiKey: null,
+          model: 'm',
+        );
+        expect(cfg.configured, isTrue, reason: 'precondition');
+
+        final pushed = <String?>[];
+        t.view.physicalSize = const Size(1170, 2532);
+        t.view.devicePixelRatio = 3;
+        addTearDown(t.view.reset);
+        await t.pumpWidget(
+          ChangeNotifierProvider<CoachConfig>.value(
+            value: cfg,
+            child: MaterialApp(
+              theme: buildTheme(Brightness.light),
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              navigatorObservers: [_RouteLog(pushed)],
+              home: EcgDetailScreen(
+                data: EcgDetailData(
+                  reading: _reading(packets: 0),
+                  packets: const [],
+                ),
+              ),
+            ),
+          ),
+        );
+        await t.pump();
+
+        await t.tap(find.byType(ActionCard));
+        expect(
+          pushed,
+          isNot(contains('CoachSetup')),
+          reason: 'the coach is configured — setup must not be pushed',
+        );
+      },
+    );
+  });
+
   group('analyze-now prompt', () {
     test('names the tool and forbids diagnosing from the waveform', () {
       final p = ecgAnalyzePrompt('ecg_1');
@@ -473,4 +525,15 @@ void main() {
       expect(picked, EcgWrist.left);
     });
   });
+}
+
+/// Records the names of pushed routes so a tap can be asserted without
+/// building the destination screen.
+class _RouteLog extends NavigatorObserver {
+  _RouteLog(this.pushed);
+  final List<String?> pushed;
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    pushed.add(route.settings.name);
+  }
 }

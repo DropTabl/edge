@@ -786,11 +786,11 @@ class _EcgDetailScreenState extends State<EcgDetailScreen> {
   Future<void> _analyze(BuildContext c) async {
     final l = AppLocalizations.of(c);
     final id = widget.data.reading.id;
-    if (!coachReady(c)) {
+    if (!coachReadyNow(c)) {
       await Navigator.of(
         c,
       ).push(themedRoute((_) => const CoachSetup(), name: 'CoachSetup'));
-      if (!c.mounted || !coachReady(c)) return;
+      if (!c.mounted || !coachReadyNow(c)) return;
     }
     final cfg = c.read<CoachConfig>();
     if (!cfg.isLocalEndpoint) {
