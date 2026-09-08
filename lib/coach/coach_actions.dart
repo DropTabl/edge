@@ -102,13 +102,23 @@ class CoachActions {
   // ── WHOOP MG ECG ───────────────────────────────────────────────────────────
 
   /// At most this many waveform buckets leave the device.
-  static const int ecgEnvelopeBuckets = 300;
+  /// Character budget for one `get_ecg_reading` result, kept under the
+  /// engine's `kMaxToolResultChars`. This file cannot import that constant —
+  /// the engine imports these actions, not the other way round — so
+  /// `coach_ecg_tool_test` pins the two against each other. The budget exists
+  /// so a long window is decimated deliberately rather than clipped
+  /// mid-number into JSON the model cannot parse.
+  static const int ecgMaxPayloadChars = 22000;
 
-  /// One saved ECG reading for the coach: the band-reported summary plus a
-  /// bounded min/max envelope of the accepted waveform. A BOUND query on the
+  /// Largest stride the decimation will reach before giving up widening it.
+  static const int ecgMaxStride = 16;
+
+  /// One saved ECG reading for the coach: the band-reported summary plus the
+  /// accepted waveform at the band's own sample rate. A BOUND query on the
   /// reading id — never model-written SQL — and never the raw frame hex, the
-  /// band serial, the device id, the notes or all 3,000 samples. Min/max per
-  /// bucket, not an average, so a peak survives the downsampling.
+  /// band serial, the device id or the notes. A completed reading is 30 s =
+  /// 3,000 samples and is sent whole; only a longer accepted window is
+  /// decimated, by a whole-number stride, so the result always parses.
   static Future<String> ecgReading(Database db, Object? id) async {
     final readingId = str(id);
     if (readingId.isEmpty) {
@@ -125,71 +135,89 @@ class CoachActions {
     final samples = <int?>[];
     for (final p in packets) {
       if (p.placeholder) {
-        // One second of "no data" keeps the envelope's time axis honest.
+        // One second of "no data" keeps the waveform's time axis honest.
         samples.addAll(List<int?>.filled(kEcgSampleRateHz, null));
       } else {
         samples.addAll(p.samples);
       }
     }
-    final envelope = ecgEnvelope(samples, ecgEnvelopeBuckets);
     final local = DateTime.fromMillisecondsSinceEpoch(reading.startTs * 1000);
-    return jsonEncode({
-      'id': reading.id,
-      'local_time': local.toIso8601String(),
-      'date': dayLabelOf(local),
-      'status': reading.status.name,
-      'band_category': reading.category.name,
-      'result_code': reading.resultCode,
-      'avg_hr': reading.avgHr,
-      'quality': reading.quality,
-      'unreadable_reasons': reading.unreadableReasons,
-      'interruptions': reading.interruptions,
-      'duration_s': reading.durationS,
-      'sample_count': reading.sampleCount,
-      'missing_segments': reading.missingSegments,
-      'min_uv': reading.minUv,
-      'max_uv': reading.maxUv,
-      'rms_uv': reading.rmsUv,
-      'source': 'WHOOP MG band (HeartKey result; category is the band\'s)',
-      'unit': reading.sampleCount == 0 ? null : kEcgSampleUnit,
-      'sample_rate_hz': kEcgSampleRateHz,
-      'waveform_envelope': {
-        'buckets': envelope.length,
-        'bucket_ms': samples.isEmpty
-            ? null
-            : (samples.length * 1000 / kEcgSampleRateHz / envelope.length)
-                .round(),
-        'points': envelope,
-        'note': 'per-bucket [min, max] in filtered input-referred microvolts; '
-            'null where the accepted window has a missing segment',
-      },
-      'note': 'Band-reported. Not a diagnosis: no lead polarity is proven and '
-          'the phone classifies nothing from the waveform.',
-    });
-  }
 
-  /// Deterministic min/max envelope: [samples] split into at most [buckets]
-  /// contiguous ranges; each yields `[min, max]`, or null when the range
-  /// holds no real sample.
-  static List<List<int>?> ecgEnvelope(List<int?> samples, int buckets) {
-    if (samples.isEmpty || buckets <= 0) return const [];
-    final n = samples.length;
-    final count = n < buckets ? n : buckets;
-    final out = <List<int>?>[];
-    for (var b = 0; b < count; b++) {
-      final lo = (b * n / count).floor();
-      final hi = ((b + 1) * n / count).floor().clamp(lo + 1, n);
-      int? mn;
-      int? mx;
-      for (var i = lo; i < hi; i++) {
-        final v = samples[i];
-        if (v == null) continue;
-        mn = mn == null ? v : (v < mn ? v : mn);
-        mx = mx == null ? v : (v > mx ? v : mx);
-      }
-      out.add(mn == null ? null : [mn, mx!]);
+    /// Every `stride`-th sample, keeping nulls so the time axis stays honest.
+    List<int?> strided(int stride) => stride <= 1
+        ? samples
+        : [for (var i = 0; i < samples.length; i += stride) samples[i]];
+
+    Map<String, Object?> payload(int stride) {
+      final out = strided(stride);
+      return {
+        'id': reading.id,
+        'local_time': local.toIso8601String(),
+        'date': dayLabelOf(local),
+        'status': reading.status.name,
+        'band_category': reading.category.name,
+        'result_code': reading.resultCode,
+        'avg_hr': reading.avgHr,
+        'quality': reading.quality,
+        'unreadable_reasons': reading.unreadableReasons,
+        'interruptions': reading.interruptions,
+        'duration_s': reading.durationS,
+        'sample_count': reading.sampleCount,
+        'missing_segments': reading.missingSegments,
+        'min_uv': reading.minUv,
+        'max_uv': reading.maxUv,
+        'rms_uv': reading.rmsUv,
+        'source': 'WHOOP MG band (HeartKey result; category is the band\'s)',
+        'unit': reading.sampleCount == 0 ? null : kEcgSampleUnit,
+        'sample_rate_hz': kEcgSampleRateHz,
+        'waveform': {
+          'samples': out,
+          'count': out.length,
+          'stride': stride,
+          'effective_rate_hz': kEcgSampleRateHz / stride,
+          'note': 'consecutive samples in filtered input-referred microvolts at '
+              'effective_rate_hz; null where the accepted window has a missing '
+              'segment. stride 1 is every sample the band sent.',
+        },
+        // What the numbers above are and what they cannot support. The model
+        // otherwise infers intervals from avg_hr and reads QRS width as if the
+        // trace were a 500 Hz diagnostic ECG.
+        'how_to_read': {
+          'sample_rate': 'The band acquires at 500 Hz and hands HeartKey those '
+              'raw samples; what you get here is the band\'s own filtered and '
+              '5:1 decimated 100 Hz output. One sample is 10 ms, so every '
+              'interval or width you measure is quantised to 10 ms — enough '
+              'for rate and regularity, coarse for QRS width, and marginal '
+              'for P-wave detail. The 500 Hz raw is not available to you.',
+          'units': 'Integer input-referred microvolts, already scaled on the '
+              'band. No further conversion.',
+          'polarity': 'Anatomical lead orientation is NOT proven. Do not infer '
+              'axis, or read R/S direction as anatomical.',
+          'avg_hr': 'The BAND\'s own average over the reading. It is not '
+              'measured from these samples. If you state an RR interval or '
+              'beat-to-beat variation, measure it from the samples and say so '
+              '— do not present 60/avg_hr as a measurement.',
+          'quality': 'The band\'s own 0-3 signal-quality scale, higher is '
+              'better; it climbs as contact settles.',
+          'interruptions': 'Times contact was lost and the band restarted its '
+              'progress. missing_segments are whole seconds absent from the '
+              'accepted window, and appear as null runs in samples.',
+          'category': 'The band\'s HeartKey result mapped by the app. Your own '
+              'reading of the trace is your own; say plainly if they differ.',
+        },
+        'note': 'Band-reported. Not a diagnosis: no lead polarity is proven and '
+            'the phone classifies nothing from the waveform.',
+      };
     }
-    return out;
+
+    // Widen the stride only if the whole window will not fit one tool result.
+    var stride = 1;
+    var encoded = jsonEncode(payload(stride));
+    while (encoded.length > ecgMaxPayloadChars && stride < ecgMaxStride) {
+      stride++;
+      encoded = jsonEncode(payload(stride));
+    }
+    return encoded;
   }
 
   // ── nutrition ──────────────────────────────────────────────────────────────

@@ -70,6 +70,49 @@ void main() {
     await LocalDb.insertEcgReading(reading.toRow(), [
       for (final x in packets) EcgPacketCodec.toRow(x),
     ]);
+
+    // A window far longer than a completed reading, with wide (4-digit)
+    // values, so the payload cannot fit whole and the stride has to widen.
+    final long = <EcgAcceptedPacket>[];
+    for (var s = 0; s < 200; s++) {
+      long.add(
+        EcgAcceptedPacket(
+          sequence: s,
+          strapSeconds: 1787823754 + s,
+          strapSubsec: 0,
+          samples: Int16List.fromList(
+            List.generate(100, (i) => i.isEven ? -2582 : 2471),
+          ),
+          inner: Uint8List.fromList(List.filled(228, 0xab)),
+        ),
+      );
+    }
+    await LocalDb.insertEcgReading(
+      EcgReading(
+        id: 'ecg_tool_long',
+        deviceId: 'SERIAL-SECRET',
+        wrist: EcgWrist.right,
+        startTs: 1787823754,
+        endTs: 1787823954,
+        strapTerminalTs: 1787823954,
+        strapTerminalSubsec: 0,
+        resultCode: 1,
+        category: EcgCategory.sinusRhythm,
+        avgHr: 77,
+        quality: 3,
+        unreadableMask: 0,
+        interruptions: 0,
+        sampleCount: 20000,
+        minUv: -2582,
+        maxUv: 2471,
+        rmsUv: 2526.0,
+        missingSegments: 0,
+        status: EcgReadingStatus.completed,
+        notes: 'private note',
+        createdAt: 1787823954000,
+      ).toRow(),
+      [for (final x in long) EcgPacketCodec.toRow(x)],
+    );
   });
 
   tearDownAll(() async {
@@ -79,7 +122,7 @@ void main() {
   });
 
   test(
-    'returns the band summary and a bounded envelope; no identity, no bytes',
+    'returns the band summary and the full waveform; no identity, no bytes',
     () async {
       final out = await CoachActions.ecgReading(
         await LocalDb.instance,
@@ -94,26 +137,37 @@ void main() {
       expect(j['sample_count'], 3000);
       expect(j['missing_segments'], 1);
       expect(j['unit'], kEcgSampleUnit);
-      final env = j['waveform_envelope'] as Map<String, dynamic>;
-      final pts = env['points'] as List;
-      expect(pts.length, lessThanOrEqualTo(CoachActions.ecgEnvelopeBuckets));
-      expect(env['buckets'], pts.length);
+      final wf = j['waveform'] as Map<String, dynamic>;
+      final pts = wf['samples'] as List;
+      expect(wf['stride'], 1, reason: 'a 30 s reading is sent whole');
+      expect(wf['count'], pts.length);
+      expect(wf['effective_rate_hz'], kEcgSampleRateHz);
+      expect(
+        pts.whereType<int>().length,
+        j['sample_count'],
+        reason: 'every sample the band sent, not a summary',
+      );
+      expect(
+        pts.length,
+        (j['sample_count'] as int) +
+            (j['missing_segments'] as int) * kEcgSampleRateHz,
+        reason: 'a missing segment holds its second open',
+      );
       expect(
         pts.where((e) => e == null),
         isNotEmpty,
         reason: 'the placeholder second',
       );
-      final maxes = pts.whereType<List>().map((e) => e[1] as int);
-      final mins = pts.whereType<List>().map((e) => e[0] as int);
-      expect(maxes, contains(731), reason: 'peaks survive the downsampling');
-      expect(mins, contains(-531));
+      final real = pts.whereType<int>();
+      expect(real, contains(731), reason: 'peaks are the real samples');
+      expect(real, contains(-531));
       expect(out, isNot(contains('SERIAL-SECRET')));
       expect(out, isNot(contains('private note')));
       expect(out, isNot(contains('abab')));
       expect(out, isNot(contains('device_id')));
       expect(
         out.length,
-        lessThan(CoachEngine.kMaxToolResultChars),
+        lessThan(CoachEngine.kMaxEcgToolResultChars),
         reason: 'fits one tool result without truncation',
       );
     },
@@ -129,27 +183,58 @@ void main() {
     );
   });
 
-  test('the envelope is deterministic and never averages a bucket', () {
-    // 8 samples into 3 buckets: [0,2) [2,5) [5,8) — floors, deterministic.
-    final env = CoachActions.ecgEnvelope([1, 9, -4, null, null, 2, 2, 2], 3);
-    expect(env, [
-      [1, 9],
-      [-4, -4],
-      [2, 2],
-    ]);
-    // A bucket that is entirely missing is null, not zero.
-    expect(CoachActions.ecgEnvelope([5, null, null, 7], 2), [
-      [5, 5],
-      [7, 7],
-    ]);
-    expect(CoachActions.ecgEnvelope([null, null, 3, 4], 2), [
-      null,
-      [3, 4],
-    ]);
-    expect(CoachActions.ecgEnvelope(const [], 300), isEmpty);
-    expect(CoachActions.ecgEnvelope([5], 300), [
-      [5, 5],
-    ]);
+  test('an over-long window is decimated, never clipped', () async {
+    final out = await CoachActions.ecgReading(
+      await LocalDb.instance,
+      'ecg_tool_long',
+    );
+    expect(
+      out.length,
+      lessThanOrEqualTo(CoachActions.ecgMaxPayloadChars),
+      reason: 'the result parses whole',
+    );
+    final j = jsonDecode(out) as Map<String, dynamic>; // would throw if clipped
+    final wf = j['waveform'] as Map<String, dynamic>;
+    expect(wf['stride'], greaterThan(1));
+    expect(wf['effective_rate_hz'], kEcgSampleRateHz / (wf['stride'] as int));
+    expect(wf['count'], (wf['samples'] as List).length);
+    expect(
+      j['sample_count'],
+      20000,
+      reason: 'the summary still reports the true length',
+    );
+  });
+
+  test('the payload budget stays under the engine ceiling', () {
+    expect(
+      CoachActions.ecgMaxPayloadChars,
+      lessThan(CoachEngine.kMaxEcgToolResultChars),
+      reason: 'decimate deliberately rather than be clipped mid-number',
+    );
+    // A bound single-reading lookup may be larger than a query the model
+    // widens itself, but never larger than the running history it lives in.
+    expect(
+      CoachEngine.kMaxToolResultChars,
+      lessThan(CoachEngine.kMaxEcgToolResultChars),
+    );
+    expect(
+      CoachEngine.kMaxEcgToolResultChars,
+      lessThan(CoachEngine.kMaxHistoryChars),
+    );
+  });
+
+  test('the result explains the data it carries', () async {
+    final out = await CoachActions.ecgReading(
+      await LocalDb.instance,
+      'ecg_tool_1',
+    );
+    final h =
+        (jsonDecode(out) as Map<String, dynamic>)['how_to_read']
+            as Map<String, dynamic>;
+    expect(h['sample_rate'], contains('500 Hz'));
+    expect(h['sample_rate'], contains('10 ms'));
+    expect(h['avg_hr'], contains('not measured from these samples'));
+    expect(h['polarity'], contains('NOT proven'));
   });
 
   test('the system prompt carries the ECG law and the tool', () {
