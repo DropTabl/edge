@@ -1056,6 +1056,12 @@ class AppState extends ChangeNotifier {
     phoneStepsEnabled = false;
     phoneStepsToday = 0;
     _phoneStepsDay = null;
+    // The data edge, for the same reason. It only ever moves FORWARD, so a
+    // wipe that left it set meant a re-pair without a relaunch showed the
+    // deleted install's "Synced through …" — and no amount of syncing the new
+    // band could pull the label back to the truth.
+    _lastRecTs = null;
+    lastSynced = null;
 
     await signOut();
   }
@@ -2787,8 +2793,13 @@ class AppState extends ChangeNotifier {
   // never persisted). Just write the raw record (+ optional decoded sample).
   Future<void> _onRecord(Sample? sample, RawRecord raw) async {
     final ts = raw.recTs ?? sample?.tsEpoch;
-    if (ts != null && ts > 0 && ts > (_lastRecTs ?? 0)) _lastRecTs = ts;
     await LocalDb.insertRecord(raw, sample);
+    // AFTER the write, not before it. `_lastRecTs` is the DATA EDGE — what is
+    // banked — and it only ever moves forward, so advancing it first meant a
+    // failed insert advertised a record the database does not hold, for the
+    // rest of the process. Now surfaced on Home ("Synced through …"), where
+    // claiming data we do not have is the one thing the line must not do.
+    if (ts != null && ts > 0 && ts > (_lastRecTs ?? 0)) _lastRecTs = ts;
   }
 
   // Ephemeral live high-rate frame (0x28/0x2B/0x33) — NOT persisted. The
