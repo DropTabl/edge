@@ -140,12 +140,36 @@ void main() {
     }
   });
 
-  test('the gate is a plain latch — enter, leave, and it stays put', () {
+  test('the gate opens on enter and shuts on leave', () {
     addTearDown(ResetGate.resetForTest);
     expect(ResetGate.active, isFalse);
     ResetGate.enter();
     expect(ResetGate.active, isTrue);
     ResetGate.leave();
     expect(ResetGate.active, isFalse);
+  });
+
+  test('a second reset on top of the first does not reopen the window', () {
+    // `resetAllData()` is awaited but does not block the UI, so a user can
+    // confirm a second wipe while the first is still running. A bare bool let
+    // the first to finish lower the flag mid-wipe.
+    addTearDown(ResetGate.resetForTest);
+    ResetGate.enter();
+    ResetGate.enter();
+    ResetGate.leave();
+    expect(ResetGate.active, isTrue,
+        reason: 'the second reset is still wiping');
+    ResetGate.leave();
+    expect(ResetGate.active, isFalse);
+  });
+
+  test('an unbalanced leave cannot drive the gate below shut', () {
+    // A count below zero would make the NEXT reset's enter() fail to open the
+    // gate — the failure mode that loses data.
+    addTearDown(ResetGate.resetForTest);
+    ResetGate.leave();
+    ResetGate.leave();
+    ResetGate.enter();
+    expect(ResetGate.active, isTrue);
   });
 }

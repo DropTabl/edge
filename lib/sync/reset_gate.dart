@@ -40,19 +40,35 @@ library;
 class ResetGate {
   ResetGate._();
 
-  static bool _active = false;
+  /// How many resets are in flight, not whether one is.
+  ///
+  /// `resetAllData()` is awaited but does not block the UI: the confirm dialog
+  /// is already dismissed when it starts, `backToRoot` only runs when it ends,
+  /// and a wipe of a real database takes seconds. So a user can walk back into
+  /// Settings and confirm a second one on top of the first. With a bare bool
+  /// the first to finish lowers the flag while the second is still wiping —
+  /// reopening the exact window this class exists to close, at the worst
+  /// possible moment. Counted, the gate stays shut until the LAST one leaves.
+  static int _depth = 0;
 
-  /// True from the moment a reset starts until it finishes (or throws).
-  static bool get active => _active;
+  /// True from the moment a reset starts until the last one finishes (or
+  /// throws).
+  static bool get active => _depth > 0;
 
   /// Raise before the wipe. Pair with [leave] in a `finally`: a half-reset
   /// install that silently drops every record is worse than the race this
   /// closes.
-  static void enter() => _active = true;
+  static void enter() => _depth++;
 
-  static void leave() => _active = false;
+  /// Clamped at zero rather than allowed to go negative: an unbalanced [leave]
+  /// is a bug, but one that drove the count below zero would make the NEXT
+  /// reset's `enter()` fail to open the gate, which is the failure that loses
+  /// data. Absorb it here instead.
+  static void leave() {
+    if (_depth > 0) _depth--;
+  }
 
-  /// Test seam — the flag is static, so a test that raises it must be able to
+  /// Test seam — the count is static, so a test that raises it must be able to
   /// put it back even if it fails.
-  static void resetForTest() => _active = false;
+  static void resetForTest() => _depth = 0;
 }
