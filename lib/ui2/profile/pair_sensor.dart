@@ -34,8 +34,7 @@
 import 'dart:async' show unawaited;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart'
-    show BluetoothDevice, FlutterBluePlus;
+import 'package:flutter_blue_plus/flutter_blue_plus.dart' show BluetoothDevice;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 
@@ -44,6 +43,7 @@ import '../../ble/band_status_l10n.dart' show localizedBandStatus;
 import '../../ble/ble_state.dart'
     show BleUnavailableException, bandStatusFor, classifyBleBlocker;
 import '../../ble/hrs_link.dart';
+import '../../data/db.dart' show LocalDb;
 import '../../l10n/app_localizations.dart';
 import '../../state/app_state.dart';
 import '../ui2.dart';
@@ -99,20 +99,32 @@ class _PairSensorScreenState extends State<PairSensorScreen> {
 
   @override
   void dispose() {
-    // `HrsLink._scanFor` awaits the scan's OWN timeout with nothing this
-    // screen can cancel through the API it exposes — the scan keeps the
-    // process-wide radio lock for the rest of that window even after this
-    // screen is gone. `stopScan()` flips `isScanningNow` false, which is
-    // exactly the condition `_scanFor` is already awaiting, so this ends it
-    // early instead of leaving a dismissed screen's scan blocking whoever
-    // asks for the radio next (a re-opened pairing screen, the band's own
-    // scan). Harmless if nothing is scanning.
-    if (_scanning) unawaited(FlutterBluePlus.stopScan());
+    // Ends THIS SCREEN's scan early if it is the one running. Never a bare
+    // `FlutterBluePlus.stopScan()`: the radio has one scanner and every
+    // holder awaits `isScanning == false`, so a stop issued while our own
+    // scan is still queued behind `withScanLock` would end the RUNNING
+    // holder's scan — which then reports "found nothing" with no error to
+    // say why. Hence the `owner` token: it is this `State`, so the check is
+    // "mine", not "one of ours". Unawaited here, and only here: `dispose`
+    // cannot await one, and nothing follows it onto the radio — unlike
+    // `_pick`, where a connect does.
+    unawaited(HrsLink.stopScanIfRunning(this));
     super.dispose();
   }
 
   Future<void> _load() async {
-    final row = await HrsLink.pairedSensorRow();
+    // NOT `HrsLink.pairedSensorRow()` — that is hardcoded to the heart-rate
+    // strap's own adapter id, and this screen is generic over [BandEntry]
+    // (a Colmi ring, an Oura ring, a strap). Looked up by `widget.entry.id`
+    // directly so "already paired" renders for whichever band this screen
+    // was opened for.
+    Map<String, Object?>? row;
+    for (final r in await LocalDb.deviceRows()) {
+      if (r['adapter_id'] == widget.entry.id) {
+        row = r;
+        break;
+      }
+    }
     final held = await HrsLink.scanHeldBackReason();
     if (!mounted) return;
     setState(() {
@@ -133,6 +145,7 @@ class _PairSensorScreenState extends State<PairSensorScreen> {
     try {
       await HrsLink.scanFor(
         widget.entry,
+        owner: this,
         onResults: (c) {
           if (mounted) setState(() => _found = c);
         },
@@ -168,6 +181,11 @@ class _PairSensorScreenState extends State<PairSensorScreen> {
     // the screen is torn down and rebuilt — the same "stuck busy" failure
     // mode a returned failure string already has a real answer for.
     final l = AppLocalizations.of(context);
+    // OUR OWN SCAN, ENDED AND WAITED OUT, before anything connects. This
+    // screen's 15 s window is very likely still running when a row is tapped,
+    // and a connect racing a live scan is the classic Android GATT-133. Read
+    // `l` above the await, because `context` after one is the lint's point.
+    await HrsLink.stopScanIfRunning(this);
     String? failure;
     try {
       failure = widget.onPicked != null
@@ -291,7 +309,7 @@ class PairSensorView extends StatelessWidget {
                   const SizedBox(height: S.x4),
                   StatusCard(
                     l?.pairSensorSearchWouldHideSheet ??
-                        'Searching would hide the WHOOP pairing sheet',
+                        'Searching would hide the system pairing sheet',
                     heldBack!,
                     fix: l?.pairSensorSearchAnyway ?? 'Search anyway',
                     icon: LucideIcons.triangleAlert,

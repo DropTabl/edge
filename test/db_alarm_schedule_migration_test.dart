@@ -59,15 +59,15 @@ void main() {
   });
 
   test(
-      'upgrade from v49 reaches schemaVersion 50 and creates alarm_schedule '
-      'keyed on weekday', () async {
+      'upgrade from v49 reaches the current schemaVersion and creates '
+      'alarm_schedule keyed on weekday', () async {
     const name = 'openstrap_alarm_schedule_migration_test.db';
     created.add(name);
     await _seedEmptyV49Db(name);
     final version = await _openThroughLocalDb(name);
-    // The v50 rung is what this file isolates; later rungs (v51 added the
-    // WHOOP MG ECG store) ride the same open, so the ladder's top is a floor
-    // here, not a literal.
+    // The v50 rung is what this file isolates; later rungs (v51 multi-device
+    // attribution, v52 the WHOOP MG ECG store) ride the same open, so the
+    // ladder's top is a floor here, not a number this test owns.
     expect(LocalDb.schemaVersion, greaterThanOrEqualTo(50));
     expect(version, LocalDb.schemaVersion);
 

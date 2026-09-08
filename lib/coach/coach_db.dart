@@ -90,6 +90,7 @@ class CoachDb {
     // raw / decoded substrate
     'raw_records', 'raw_archive', 'decoded_onehz', 'decoded_rr', 'samples',
     'events', 'band_events', 'band_battery',
+    'device_coverage', 'signal_priority',
     // WHOOP MG ECG. `ecg_reading` is a base table of an allowed view, so the
     // structural gate would admit its btree — this token-level block is what
     // keeps `device_id`/`notes` (never in the view) out of run_sql. The two

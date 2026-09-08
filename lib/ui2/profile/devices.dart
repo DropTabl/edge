@@ -7,8 +7,20 @@
 // platform health stores: Apple Health and Health Connect rank by whatever
 // wrote last (with a manual priority list bolted on top), so a phone's step
 // estimate can quietly outrank a chest strap. Here the better sensor wins and
-// recency only breaks a tie within a tier. There is no user preference and the
-// screen no longer claims one — no control ever set an order.
+// recency only breaks a tie within a tier.
+//
+// RULING (supersedes the "no user preference" clause this paragraph used to
+// carry). The default order for every signal is derived from physics, computed
+// from `BandAdapter.signals`; `rankSources`' tier ladder stays as the source of
+// that default. A user may reorder WITHIN ONE SIGNAL, and when they do the row
+// is marked `user_set = 1` with a one-tap reset. Recency never enters a
+// cross-device comparison. The screen no longer claims a preference it cannot
+// set, because now it can.
+//
+// PER SIGNAL, never per metric, and never an N×M grid in Settings. "Priority
+// for readiness" has no meaning — readiness has four inputs. Only a handful of
+// declared signals ever contend, so `contendedSignals` is usually empty and
+// `SignalPriorityScreen`'s entry row is then absent entirely.
 //
 // TWO BUCKETS AND ONLY TWO: what is measuring, and what is NOT YET — the
 // second with a reason and a PERMANENCE beside it. "Not yet" without a
@@ -31,20 +43,82 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 
 import '../../ble/adapters/_registry.dart'
-    show BandEntry, kBandRegistry, kBleHrs, kOura;
+    show
+        BandEntry,
+        kBandRegistry,
+        kBangleJs,
+        kBleHrs,
+        kColmi,
+        kCoros,
+        kDafit,
+        kGarmin,
+        kId115,
+        kJyou,
+        kHPlus,
+        kLefun,
+        kMakibesHr3,
+        kMiBand234,
+        kNo1Band,
+        kOura,
+        kO2Ring,
+        kPebble,
+        kPolarPmd,
+        kRing11m,
+        kRingConn,
+        kCasio,
+        kDt78,
+        kPineTime,
+        kQHybrid,
+        kSmaq2oss,
+        kUltrahuman,
+        kWatch9,
+        kWearFit,
+        kWithingsSteelHr,
+        kXWatch,
+        kZeTime,
+        declaredSignals;
+import '../../ble/adapters/signals.dart' show InputSignal;
+import '../../ble/banglejs_link.dart' show BangleJsLink;
+import '../../ble/casio_link.dart' show CasioLink;
+import '../../ble/colmi_link.dart' show ColmiLink;
+import '../../ble/coros_link.dart' show CorosLink;
+import '../../ble/dafit_link.dart' show DafitLink;
+import '../../ble/dt78_link.dart' show Dt78Link;
+import '../../ble/garmin_link.dart' show GarminLink;
 import '../../ble/hrs_link.dart' show HrsLink, HrsReading;
+import '../../ble/id115_link.dart' show Id115Link;
+import '../../ble/jyou_link.dart' show JyouLink;
+import '../../ble/makibeshr3_link.dart' show MakibesHr3Link;
+import '../../ble/miband_link.dart' show MiBand234Link, pairMiBand234;
 import '../../ble/oura_link.dart' show OuraLink, pairOuraRing;
+import '../../ble/pebble_link.dart' show PebbleLink;
+import '../../ble/polar_pmd_link.dart' show PolarPmdLink;
+import '../../ble/ring11m_link.dart' show Ring11mLink;
+import '../../ble/smaq2oss_link.dart' show Smaq2ossLink;
+import '../../ble/o2ring_link.dart' show O2RingLink, pairO2Ring;
+import '../../ble/hplus_link.dart' show HPlusLink;
+import '../../ble/pinetime_link.dart' show PineTimeLink;
+import '../../ble/qhybrid_link.dart' show QHybridLink, pairQHybrid;
+import '../../ble/ringconn_link.dart' show RingConnLink;
+import '../../ble/tlw64_link.dart' show Tlw64Link;
+import '../../ble/ultrahuman_link.dart' show UltrahumanLink;
+import '../../ble/watch9_link.dart' show Watch9Link;
+import '../../ble/wearfit_link.dart' show WearFitLink;
+import '../../ble/withings_steel_hr_link.dart'
+    show WithingsSteelHrLink, pairWithingsSteelHr;
+import '../../ble/xwatch_link.dart' show XWatchLink;
+import '../../ble/zetime_link.dart' show ZeTimeLink, pairZeTime;
 import '../../ble/band_status_l10n.dart' show localizedBandStatus;
-import '../../ble/ble_state.dart' show BandStatus;
+import '../../ble/ble_state.dart' show BandStatus, kMaxConcurrentSecondaryLinks;
 import '../../data/db.dart' show LocalDb;
 import '../../l10n/app_localizations.dart';
 import '../../notify/battery_forecast.dart';
+import '../../state/prefs.dart' show Prefs;
 import '../../sync/paired_device.dart' show cleanDeviceLabel;
 import '../../state/app_state.dart';
-import '../onboarding/pairing.dart';
+import '../pairing/device_picker.dart' show DevicePickerScreen;
 import '../onboarding/profile_setup.dart' show formatDay;
 import '../ui2.dart';
-import 'pair_sensor.dart' show PairSensorScreen;
 import 'profile.dart';
 import 'settings.dart' show backToRoot;
 
@@ -124,6 +198,482 @@ String? bandLabelFor(String? adapterId) {
     if (e.id == adapterId) return e.label;
   }
   return null;
+}
+
+/// One row in a metric screen's device filter (final-plan §6.3).
+///
+/// THREE STATES, and the third is why this is a type rather than a
+/// `List<String>`: a device that cannot supply the metric is SHOWN, disabled,
+/// with the reason. An unexplained absent option is the thing users file bugs
+/// about, and an unexplained empty chart is worse.
+typedef DeviceOption = ({
+  /// `device.id`. `''` is the primary band, permanently (ASSUMPTIONS A1).
+  String deviceId,
+
+  /// What the pill says — the user's own label for the device.
+  String label,
+
+  /// False when the device does not declare every signal the metric needs.
+  /// The pill is drawn and untappable.
+  bool selectable,
+
+  /// Non-null ONLY when the option is worth explaining: the missing-signal
+  /// reason for a non-selectable one, or the empty-window reason for a
+  /// selectable one with no coverage. Null on the ordinary case.
+  String? reason,
+});
+
+/// The metric-screen device filter: one pill per candidate, plus the reason
+/// under it when there is one.
+///
+/// ABSENT, not empty, when [options] has fewer than two entries — the widget
+/// returns `SizedBox.shrink()` so a single-device screen has no row, no
+/// padding, and no layout shift. That is the assertion the single-device
+/// goldens make (final-plan §6.5).
+class DeviceFilter extends StatelessWidget {
+  const DeviceFilter({
+    super.key,
+    required this.options,
+    required this.selected,
+    required this.onSelect,
+    this.color = C.blue,
+  });
+
+  final List<DeviceOption> options;
+
+  /// Null is "All devices" — the merged view, and the default.
+  final String? selected;
+
+  /// Null argument means All devices.
+  final ValueChanged<String?> onSelect;
+  final Color color;
+
+  @override
+  Widget build(BuildContext c) {
+    if (options.length < 2) return const SizedBox.shrink();
+    final p = P.of(c);
+    final l = AppLocalizations.of(c);
+    final all = l?.deviceFilterAllDevices ?? 'All devices';
+    final labels = [all, for (final o in options) o.label];
+    final index = selected == null
+        ? 0
+        : options.indexWhere((o) => o.deviceId == selected) + 1;
+    // Index 0 is All devices and is always tappable, so every disabled index
+    // is shifted by one — the off-by-one that would otherwise grey the wrong
+    // pill.
+    final disabled = <int>{
+      for (var i = 0; i < options.length; i++)
+        if (!options[i].selectable) i + 1,
+    };
+    final shown = index <= 0 ? null : options[index - 1];
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      SubTabs(
+        labels,
+        index < 0 ? 0 : index,
+        (i) => onSelect(i == 0 ? null : options[i - 1].deviceId),
+        color: color,
+        disabled: disabled,
+      ),
+      // THE REASON, for the selected pill and for any disabled one. Never an
+      // unexplained empty chart and never an unexplained dead option.
+      if (shown?.reason case final r?) ...[
+        const SizedBox(height: S.x2),
+        Text('${shown!.label} · $r', style: F.over.copyWith(color: p.ink3)),
+      ] else if (disabled.isNotEmpty) ...[
+        const SizedBox(height: S.x2),
+        Text(
+          [
+            // `reason` is documented as non-null for a non-selectable option
+            // but the type does not enforce it, and an unguarded
+            // interpolation renders the literal text "null" beside the label.
+            for (final o in options)
+              if (!o.selectable)
+                o.reason == null ? o.label : '${o.label} · ${o.reason}',
+          ].join('   '),
+          style: F.over.copyWith(color: p.ink3),
+        ),
+      ],
+    ]);
+  }
+}
+
+/// The global per-signal priority editor: one drag-reorder list per contended
+/// signal, reached from `MyDevicesView`'s "Which source wins" row. Only
+/// contended signals get a list — a signal only one paired device declares
+/// has nothing to order (final-plan §4.5).
+class SignalPriorityScreen extends StatefulWidget {
+  const SignalPriorityScreen({super.key});
+
+  @override
+  State<SignalPriorityScreen> createState() => _SignalPriorityScreenState();
+}
+
+class _SignalPriorityScreenState extends State<SignalPriorityScreen> {
+  bool _loading = true;
+  List<InputSignal> _signals = const [];
+  Map<InputSignal, List<String>> _order = const {};
+  Map<String, String> _labels = const {};
+  Set<String> _userSet = const {};
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  Future<void> _load() async {
+    final app = context.read<AppState>();
+    final sources = liveSources(app);
+    final signals = contendedSignalsOf(sources);
+    final labels = <String, String>{
+      // The phone has no `device` row, so no id. Coalesced to `''` its null
+      // collapsed onto the PRIMARY BAND's key, and a map literal keeps
+      // insertion order with last-write-wins — so a phone iterated after the
+      // band renamed the band's row in the reorder list. The user then drags
+      // a row labelled "Your phone" that actually moves the band, in the one
+      // editor that decides which device wins a signal.
+      for (final s in sources) ?deviceIdOf(s): s.name,
+    };
+    final priorities = await LocalDb.signalPriorities();
+    final order = <InputSignal, List<String>>{};
+    for (final sig in signals) {
+      final declaring = declaringDeviceIds(sources, sig);
+      final stored = priorities[sig.name];
+      order[sig] = stored != null && stored.isNotEmpty
+          ? [
+              for (final id in stored) if (declaring.contains(id)) id,
+              for (final id in declaring) if (!stored.contains(id)) id,
+            ]
+          : declaring;
+    }
+    final userSet = await LocalDb.userSetSignals();
+    if (!mounted) return;
+    setState(() {
+      _signals = signals;
+      _labels = labels;
+      _order = order;
+      _userSet = userSet;
+      _loading = false;
+    });
+  }
+
+  /// A write that did not land must never look like one that did — the list
+  /// snapping back with no sentence anywhere is how a user believes they set
+  /// a preference they did not.
+  Future<void> _sayNotSaved() => showReasonSheet(
+        context,
+        AppLocalizations.of(context)?.devicesOrderNotSaved ??
+            'That order could not be saved. Nothing changed.',
+      );
+
+  @override
+  Widget build(BuildContext c) {
+    final p = P.of(c);
+    final l = AppLocalizations.of(c);
+    return Scaffold(
+      backgroundColor: p.bg,
+      body: SafeArea(
+        child: Column(children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: S.x4),
+            child: NavBar(l?.devicesWhichSourceWins ?? 'Which source wins'),
+          ),
+          if (_loading)
+            const Expanded(child: Center(child: CircularProgressIndicator()))
+          else
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(S.x4, 0, S.x4, S.x10),
+                children: [
+                  for (final sig in _signals) ...[
+                    Section(
+                      signalDisplayName(c, sig),
+                      Column(children: [
+                        ReorderableListView(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          onReorder: (from, to) async {
+                            final ids = [...?_order[sig]];
+                            // ReorderableListView's `to` is the index BEFORE removal.
+                            ids.insert(
+                                to > from ? to - 1 : to, ids.removeAt(from));
+                            try {
+                              await LocalDb.setSignalPriority(sig, ids);
+                            } catch (_) {
+                              // The stored order is unchanged, so leave the
+                              // list where it was rather than showing an order
+                              // nothing persisted. Same shape as `_saveRpe`.
+                              if (mounted) await _sayNotSaved();
+                              return;
+                            }
+                            if (!mounted) return;
+                            setState(() {
+                              _order = {..._order, sig: ids};
+                              _userSet = {..._userSet, sig.name};
+                            });
+                          },
+                          children: [
+                            for (final id in _order[sig] ?? const <String>[])
+                              ListTile(
+                                key: ValueKey(id),
+                                title: Text(_labels[id] ?? id),
+                              ),
+                          ],
+                        ),
+                        if (_userSet.contains(sig.name))
+                          Pressable(
+                            onTap: () async {
+                              try {
+                                await LocalDb.clearSignalPriority(sig);
+                              } catch (_) {
+                                if (mounted) await _sayNotSaved();
+                                return;
+                              }
+                              await _load();
+                            },
+                            semanticLabel: 'Reset ${signalDisplayName(c, sig)} '
+                                'to the default order',
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: S.x2),
+                              child: Text(
+                                l?.devicesResetToDefault ??
+                                    'Back to the default order',
+                                style: F.cap.copyWith(color: p.on(C.blue)),
+                              ),
+                            ),
+                          ),
+                      ]),
+                    ),
+                    const SizedBox(height: S.x4),
+                  ],
+                  Text(
+                    l?.metricDetailHistoryKeepsSource ??
+                        'Days already finished keep the source they were '
+                            'calculated with.',
+                    style: F.over.copyWith(color: p.ink3),
+                  ),
+                ],
+              ),
+            ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// The HUMAN name for a signal, for a heading or a screen reader.
+///
+/// `InputSignal.name` is a Dart identifier — `hr1Hz`, `rrIntervals`,
+/// `skinTempRaw` — and it was reaching a settings screen as a section title
+/// and as a semantic label. An exhaustive `switch` with no `default` makes a
+/// future [InputSignal] member a COMPILE ERROR here rather than a leaked
+/// identifier, the same protection `sourceTierLabel` gives.
+String signalDisplayName(BuildContext c, InputSignal s) {
+  final l = AppLocalizations.of(c);
+  return switch (s) {
+    InputSignal.rrIntervals =>
+      l?.signalRrIntervals ?? 'Beat-to-beat intervals',
+    InputSignal.hr1Hz => l?.signalHr1Hz ?? 'Continuous heart rate',
+    InputSignal.hrSparse => l?.signalHrSparse ?? 'Heart rate',
+    InputSignal.accel1Hz => l?.signalAccel1Hz ?? 'Movement',
+    InputSignal.accelHighRate =>
+      l?.signalAccelHighRate ?? 'High-rate movement',
+    InputSignal.ppgGreen => l?.signalPpgGreen ?? 'Green PPG',
+    InputSignal.ppgRedIr => l?.signalPpgRedIr ?? 'Red/infrared PPG',
+    InputSignal.skinTempRaw => l?.signalSkinTempRaw ?? 'Skin temperature',
+    InputSignal.vendorScalars =>
+      l?.signalVendorScalars ?? 'The device’s own numbers',
+  };
+}
+
+/// Why this device cannot serve a metric, from the signals it does NOT declare.
+///
+/// Generated, never written per device per metric: it stays true when an
+/// adapter's declarations change and it costs nothing at the fortieth device.
+/// One phrase per [InputSignal] — the physical absence, not the metric.
+///
+/// Takes a [BuildContext] for the same reason [signalDisplayName] does: this
+/// is rendered to the user, as a disabled pill's sub-label, so it is translated
+/// like every other sentence on the screen. And NOT by reusing
+/// [signalDisplayName]: "no accelerometer" and "no temperature sensor" name the
+/// hardware, where the display names ("Movement", "Skin temperature") name what
+/// the user reads off it — the distinction this doc comment's last line is
+/// about. A `switch` with no `default` for the same reason as well: a new
+/// [InputSignal] member is a compile error here rather than a device silently
+/// explaining itself as "cannot supply this".
+String missingSignalReason(BuildContext c, Set<InputSignal> missing) {
+  final l = AppLocalizations.of(c);
+  String words(InputSignal s) => switch (s) {
+        InputSignal.rrIntervals =>
+          l?.missingSignalRrIntervals ?? 'no beat-to-beat intervals',
+        InputSignal.hr1Hz =>
+          l?.missingSignalHr1Hz ?? 'no continuous heart rate',
+        InputSignal.hrSparse => l?.missingSignalHrSparse ?? 'no heart rate',
+        InputSignal.accel1Hz => l?.missingSignalAccel1Hz ?? 'no accelerometer',
+        InputSignal.accelHighRate =>
+          l?.missingSignalAccelHighRate ?? 'no high-rate accelerometer',
+        InputSignal.ppgGreen => l?.missingSignalPpgGreen ?? 'no green PPG',
+        InputSignal.ppgRedIr =>
+          l?.missingSignalPpgRedIr ?? 'no red/infrared PPG',
+        InputSignal.skinTempRaw =>
+          l?.missingSignalSkinTempRaw ?? 'no temperature sensor',
+        InputSignal.vendorScalars =>
+          l?.missingSignalVendorScalars ?? 'reports nothing of its own',
+      };
+  // Ordered by the enum so two devices missing the same pair read identically.
+  final parts = [for (final s in InputSignal.values) if (missing.contains(s)) s];
+  return parts.isEmpty
+      ? (l?.missingSignalUnknown ?? 'cannot supply this')
+      : words(parts.first);
+}
+
+/// The devices that could serve [requires], newest-facts-only: a registry
+/// declaration compared against a `device` row. NO QUERY, which is what makes
+/// the visibility gate in §6.5 free.
+///
+/// SUPERSET test. A device qualifies only when its adapter declares every one
+/// of [requires] — see `MetricSpec.requires`.
+///
+/// [c] is only ever used to translate a rejected device's `reason` — see
+/// [missingSignalReason]. Nothing about WHICH devices qualify depends on it.
+List<DeviceOption> signalCandidates(
+  BuildContext c,
+  AppState app, {
+  required Set<InputSignal> requires,
+}) =>
+    candidatesFromSources(c, rankSources(liveSources(app)), requires: requires);
+
+/// The STORAGE device id for [s], or null when it has none.
+///
+/// `HealthSource.deviceId` is null for BOTH the primary band (whose stored id
+/// is `LocalDb.kPrimaryDeviceId`, `''`) and the phone (which has no `device`
+/// row at all), so the two need different answers from the same field. One
+/// helper rather than the ternary repeated at every consumer: coalescing the
+/// phone's null to `''` silently maps it ONTO the band, and force-unwrapping
+/// it throws the first time a phone source reaches a new path.
+String? deviceIdOf(HealthSource s) =>
+    s.isBand ? LocalDb.kPrimaryDeviceId : s.deviceId;
+
+/// The pure half of [signalCandidates] — split out so a test can hand-build
+/// [HealthSource]s (as `device_sources_test.dart` already does) instead of a
+/// live `AppState`. [c] is passed straight through to [missingSignalReason]
+/// and has no say in which sources qualify.
+List<DeviceOption> candidatesFromSources(
+  BuildContext c,
+  List<HealthSource> sources, {
+  required Set<InputSignal> requires,
+}) {
+  if (requires.isEmpty) return const [];
+  final out = <DeviceOption>[];
+  for (final s in sources) {
+    // The phone has no `device` row and no adapter. It is a step counter, and
+    // steps are the one metric with no `requires` at all (§4.6), so it can
+    // never be a candidate here.
+    final id = deviceIdOf(s);
+    if (id == null) continue;
+    final declared = declaredSignals(s.family);
+    // A device declaring NOTHING is not a candidate for anything — never
+    // shown, not even disabled. `OuraAdapter.signals == const {}` is exactly
+    // this case (§0): the ring is not "missing everything", it is out of
+    // scope for every metric, and a permanent disabled pill on every screen
+    // would be the noise §0 promises a WHOOP + ring user never sees.
+    if (declared.isEmpty) continue;
+    final missing = requires.difference(declared);
+    out.add((
+      deviceId: id,
+      label: s.name,
+      selectable: missing.isEmpty,
+      reason: missing.isEmpty ? null : missingSignalReason(c, missing),
+    ));
+  }
+  return out;
+}
+
+/// The devices that DECLARE [sig], in the physics ladder's order.
+///
+/// The one correct basis for a `signal_priority` write. `setSignalPriority`
+/// replaces every row of a signal, and `signalPriority`'s rows are ALSO the
+/// resolver's candidate list — so an order built from anything narrower than
+/// "declares this signal" (a metric's selectable pills, say) silently deletes
+/// a device from a signal it really does declare, and takes it out of every
+/// OTHER metric that shares that signal. Per signal, never per metric.
+List<String> declaringDeviceIds(List<HealthSource> sources, InputSignal sig) => [
+      for (final s in rankSources(sources))
+        // Skipped, never force-unwrapped: an id-less source (the phone) has
+        // nothing to rank, and `!` here would throw the day one declares a
+        // contended signal.
+        if (deviceIdOf(s) case final id?)
+          if (declaredSignals(s.family).contains(sig)) id,
+    ];
+
+/// Who currently wins each of [requires] — `{signal: deviceId}`, in
+/// [requires]' own order, from the stored `signal_priority` orders in
+/// [stored] (`LocalDb.signalPriorities()`'s shape, keyed by `signal.name`).
+///
+/// PER SIGNAL, because per signal is the only shape the table has. A metric's
+/// "preferred device" is a question about SEVERAL signals: readiness needs
+/// four, and nothing stops a user putting a chest strap first for beat timing
+/// and the band first for continuous heart rate. Reading `requires.first`
+/// alone and calling its winner the metric's preferred device asserts an
+/// agreement that may not exist — see [unanimousWinner], which is the test
+/// for whether it does.
+///
+/// A stored id is skipped unless the device still DECLARES that signal, the
+/// same filter [SignalPriorityScreen] applies when it renders an order: a row
+/// left behind by a forgotten device has no adapter to serve the window, and
+/// the resolver passes over it too (it has no coverage to own). [fallback]
+/// answers a signal with no usable row — the ladder's choice, which the
+/// caller already has in hand.
+Map<InputSignal, String?> signalWinners(
+  List<HealthSource> sources, {
+  required Set<InputSignal> requires,
+  required Map<String, List<String>> stored,
+  String? fallback,
+}) {
+  final out = <InputSignal, String?>{};
+  for (final sig in requires) {
+    final declaring = declaringDeviceIds(sources, sig);
+    String? winner;
+    for (final id in stored[sig.name] ?? const <String>[]) {
+      if (declaring.contains(id)) {
+        winner = id;
+        break;
+      }
+    }
+    out[sig] = winner ?? fallback;
+  }
+  return out;
+}
+
+/// The device winning EVERY signal in [winners], or null when they disagree —
+/// and null for an empty map, which is "nothing resolved", not agreement.
+///
+/// Null is therefore not "no preference": a caller showing one device's name
+/// must ALSO know whether the winners were split, or it labels a split
+/// configuration with whatever its no-preference placeholder happens to say.
+String? unanimousWinner(Map<InputSignal, String?> winners) {
+  final distinct = winners.values.toSet();
+  return distinct.length == 1 ? distinct.first : null;
+}
+
+/// Signals TWO OR MORE paired devices declare. The whole content of the
+/// priority editor, and the reason it is usually empty: only a handful of the
+/// declared signals ever contend, so the table is tens of rows forever
+/// (final-plan §4.5).
+List<InputSignal> contendedSignals(AppState app) =>
+    contendedSignalsOf(liveSources(app));
+
+/// The pure half of [contendedSignals] — see [candidatesFromSources].
+List<InputSignal> contendedSignalsOf(List<HealthSource> sources) {
+  final n = <InputSignal, int>{};
+  for (final s in sources) {
+    final id = deviceIdOf(s);
+    if (id == null) continue;
+    for (final sig in declaredSignals(s.family)) {
+      n[sig] = (n[sig] ?? 0) + 1;
+    }
+  }
+  return [for (final s in InputSignal.values) if ((n[s] ?? 0) >= 2) s];
 }
 
 /// Bands the owner has personally held and cross-confirmed. Everything else is
@@ -283,7 +833,32 @@ class HealthSource {
 /// The glyph for a paired sensor. A ring is not a chest strap and the row is
 /// the only place a user can tell two paired sensors apart at a glance.
 IconData sensorIcon(String? adapterId) => switch (adapterId) {
-      'oura' => LucideIcons.circleDot,
+      'oura' || 'o2ring' || 'lefun' || 'colmi' || 'ringconn' || 'ring11m' =>
+        LucideIcons.circleDot,
+      'polar_pmd' => LucideIcons.activity,
+      'coros' => LucideIcons.timer,
+      'ultrahuman' => LucideIcons.circle,
+      'dafit' ||
+      'dt78' ||
+      'garmin' ||
+      'hplus' ||
+      'id115' ||
+      'makibeshr3' ||
+      'miband234' ||
+      'pebble' ||
+      'pinetime' ||
+      'qhybrid' ||
+      'casio' ||
+      'jyou' ||
+      'wearfit' ||
+      'zetime' ||
+      'watch9' ||
+      'xwatch' ||
+      'tlw64' ||
+      'smaq2oss' ||
+      'withings_steel_hr' ||
+      'banglejs' =>
+        LucideIcons.watch,
       _ => LucideIcons.heartPulse,
     };
 
@@ -303,12 +878,14 @@ SourceTier? tierNamed(Object? name) {
 /// The sources that actually exist right now. Nothing is listed that cannot
 /// produce a number today — everything else is in [kNotYet], with its reason.
 ///
-/// [sensorLive] is whether a paired sensor's link is up THIS INSTANT. It is
-/// passed in rather than read off `HrsLink` here because it changes on every
-/// beat: routing it through [AppState] would notify every listener in the app
-/// at 1 Hz for the duration of a workout, which is the rebuild storm this
-/// screen has already been fixed for once.
-List<HealthSource> liveSources(AppState app, {bool sensorLive = false}) => [
+/// [liveAdapterIds] names which paired sensors' links are up THIS INSTANT, by
+/// `adapter_id`. It is passed in rather than read off the links here because
+/// it changes on every beat: routing it through [AppState] would notify every
+/// listener in the app at 1 Hz for the duration of a workout, which is the
+/// rebuild storm this screen has already been fixed for once.
+List<HealthSource> liveSources(AppState app,
+        {Set<String> liveAdapterIds = const {}}) =>
+    [
       if (app.isPaired)
         HealthSource(
           name: app.strapName ?? 'Your band',
@@ -346,10 +923,10 @@ List<HealthSource> liveSources(AppState app, {bool sensorLive = false}) => [
           // never the nearest rung we happen to know.
           tier: tierNamed(r['tier']),
           icon: sensorIcon(r['adapter_id'] as String?),
-          // `sensorLive` reflects HrsLink.reading ONLY — a live HRS session
-          // must not mark an unrelated paired Oura row as connected just
-          // because some sensor happens to be live right now.
-          connected: sensorLive && r['adapter_id'] == kBleHrs.id,
+          // `liveAdapterIds` is keyed by adapter so a live PPI stream never
+          // marks an unrelated paired Oura row as connected just because
+          // some sensor happens to be live right now.
+          connected: liveAdapterIds.contains(r['adapter_id']),
           isBand: false,
           deviceId: r['id'] as String?,
           family: r['adapter_id'] as String?,
@@ -372,9 +949,17 @@ List<HealthSource> liveSources(AppState app, {bool sensorLive = false}) => [
 
 /// Quality first, then recency, then the name. The inverse of last-writer-wins.
 ///
-/// There was a `preferred` list here that no caller ever passed and no screen
-/// could set — the card above it told the user their own preference was "the
-/// last word", which was a mechanism that did not exist.
+/// THE DEFAULT ORDER, and only that. There was a `preferred` list here that no
+/// caller ever passed and no screen could set — the card above it told the user
+/// their own preference was "the last word", which was a mechanism that did not
+/// exist. That is what died, and the reason it died was last-writer-wins plus a
+/// preference nothing could write. Neither has come back.
+///
+/// What HAS come back is a user order, and it does not live here: it lives in
+/// `signal_priority`, per SIGNAL, written from `SignalPriorityScreen` and from
+/// the metric screen's own "Prefer this device" row. This function is
+/// precedence rule 3 of three — consulted only where that table is silent, and
+/// it is silent for every install with one device.
 List<HealthSource> rankSources(List<HealthSource> sources) {
   final out = [...sources];
   out.sort((a, b) {
@@ -399,18 +984,26 @@ class MyDevices extends StatelessWidget {
   @override
   Widget build(BuildContext c) {
     final app = c.watch<AppState>();
-    // The live reading is subscribed HERE and nowhere higher. It moves on every
-    // beat, so a listener on AppState would rebuild the whole app at 1 Hz for
-    // the length of a workout; this rebuilds one screen.
+    // Each live reading is subscribed HERE and nowhere higher. It moves on
+    // every beat, so a listener on AppState would rebuild the whole app at
+    // 1 Hz for the length of a workout; this rebuilds one screen. Nested
+    // rather than merged into one listenable because the two links are
+    // independent — either, both, or neither can be armed for a workout.
     return ValueListenableBuilder<HrsReading?>(
       valueListenable: HrsLink.instance.reading,
-      builder: (c, reading, _) => _build(c, app, reading != null),
+      builder: (c, hrsReading, _) => ValueListenableBuilder<HrsReading?>(
+        valueListenable: PolarPmdLink.instance.reading,
+        builder: (c, polarReading, _) => _build(c, app, {
+          if (hrsReading != null) kBleHrs.id,
+          if (polarReading != null) kPolarPmd.id,
+        }),
+      ),
     );
   }
 
-  Widget _build(BuildContext c, AppState app, bool sensorLive) {
+  Widget _build(BuildContext c, AppState app, Set<String> liveAdapterIds) {
     return MyDevicesView(
-      sources: rankSources(liveSources(app, sensorLive: sensorLive)),
+      sources: rankSources(liveSources(app, liveAdapterIds: liveAdapterIds)),
       // The band row's dot says connected or not. That covers six different
       // problems with six different fixes, and a user cannot fix a problem the
       // app will not name — so the engine's own verdict rides alongside it.
@@ -424,6 +1017,8 @@ class MyDevices extends StatelessWidget {
       // way back to pairing. So push it.
       onPair: () => goto(c, const RePair()),
       onAddSensor: () => addSensor(c),
+      contendedSignals: contendedSignals(app),
+      onSignalPriority: () => goto(c, const SignalPriorityScreen()),
     );
   }
 }
@@ -452,53 +1047,361 @@ final List<({BandEntry entry, String blurb, Future<String?> Function(BluetoothDe
         'unpair the ring), then close that app before pairing here.',
     pick: pairOuraRing,
   ),
+  (
+    entry: kPolarPmd,
+    blurb: 'A Polar Verity Sense or OH1. Beat timing measured optically, '
+        'streamed during a workout, same as a chest strap.',
+    // Null: no handshake and no key — the START/STOP toggle this sensor
+    // needs belongs to the workout session, not to pairing. Same as
+    // [kBleHrs].
+    pick: null,
+  ),
+  (
+    entry: kRing11m,
+    blurb: 'An unbranded smart ring sold under many storefront names '
+        '(not the Colmi R11/R12). No account or key needed. Banks its own '
+        'data; nothing else derives from it yet.',
+    // Null means the plain notify-class pairing — no key exchange needed
+    // before the row can be written. The negotiation runs inside the
+    // adapter's own session, once connected.
+    pick: null,
+  ),
+  (
+    entry: kCoros,
+    blurb: 'A Coros sports watch. Reads battery, model/serial/firmware and '
+        'live heart rate — no pairing needed. Recorded runs, sleep and steps '
+        'stay on the watch; there is no public way to pull them off yet.',
+    // Null means the plain notify-class pairing — no key needed before the
+    // row can be written.
+    pick: null,
+  ),
+  (
+    entry: kGarmin,
+    blurb: 'A Garmin sports watch. Before pairing here, put the watch into '
+        'its own Settings → Sensors & Accessories → Phone → Pair Phone '
+        'screen — it will not accept a new connection otherwise. Reads its '
+        'model, firmware and battery; nothing else derives from it yet.',
+    // Null means the plain notify-class pairing — no key exchange this pass
+    // implements. The Multi-Link/GFDI handshake runs inside the adapter's
+    // own session, once connected.
+    pick: null,
+  ),
+  (
+    entry: kUltrahuman,
+    blurb: 'Reads the ring directly. No account, no key exchange — just pair '
+        'it like a chest strap.',
+    // Null: this wire has no auth at all, so there is no key/handshake step
+    // beyond the plain notify-class pairing — same as `kBleHrs`.
+    pick: null,
+  ),
+  (
+    entry: kWithingsSteelHr,
+    blurb: 'Pairs and connects, with no account and no subscription. Nothing '
+        'it captures is decoded into a number yet — no one on this project '
+        'has held one.',
+    pick: pairWithingsSteelHr,
+  ),
+  (
+    entry: kMiBand234,
+    blurb: 'A Mi Band 2, 3 or 4. It must have no key installed yet — one '
+        'still bound to Mi Fit or Zepp will refuse to pair. Unpair it from '
+        'that app first, or use a factory-reset unit. Pairs and connects; '
+        'nothing derives from it yet.',
+    pick: pairMiBand234,
+  ),
+  (
+    entry: kPebble,
+    blurb: 'Pebble 2 or Pebble 2 SE only — older Pebbles need Bluetooth '
+        'Classic, which this app cannot reach. Nothing is decoded yet — raw '
+        'bytes are archived for a future update to make sense of.',
+    // Same generic notify-class pairing as the chest strap above — no key,
+    // no pre-pairing step.
+    pick: null,
+  ),
+  (
+    entry: kMakibesHr3,
+    blurb: 'An unbranded Makibes HR3 board. Pairs and banks its raw data in '
+        'the background, but does not derive anything from it yet — nobody '
+        'on this project owns one to verify its numbers against.',
+    // Null means the plain notify-class pairing — no key, no clock write
+    // needed before the row can be written.
+    pick: null,
+  ),
+  (
+    entry: kId115,
+    blurb: 'An unbranded ID115 board. Pairs and banks its raw data in the '
+        'background, but does not derive anything from it yet — nobody on '
+        'this project owns one to verify its numbers against.',
+    // Null means the plain notify-class pairing — no key, no clock write
+    // needed before the row can be written.
+    pick: null,
+  ),
+  (
+    entry: kSmaq2oss,
+    blurb: 'An SMA-Q2-OSS smartwatch. Pairs and banks its raw data in the '
+        'background, but does not derive anything from it yet — nobody on '
+        'this project owns one to verify its numbers against.',
+    // Null means the plain notify-class pairing — no key, no clock write
+    // needed before the row can be written.
+    pick: null,
+  ),
+  (
+    entry: kXWatch,
+    blurb: 'An unbranded XWatch board. Pairs and banks its raw data in the '
+        'background, but does not derive anything from it yet — nobody on '
+        'this project owns one to verify its numbers against.',
+    // Null means the plain notify-class pairing — no key, no clock write
+    // needed before the row can be written.
+    pick: null,
+  ),
+  (
+    entry: kWatch9,
+    blurb: 'An unbranded Watch9 board. Pairs and banks its raw data in the '
+        'background, but does not derive anything from it yet — nobody on '
+        'this project owns one to verify its numbers against.',
+    // Null means the plain notify-class pairing — no key, no clock write
+    // needed before the row can be written.
+    pick: null,
+  ),
+  (
+    entry: kNo1Band,
+    blurb: 'A TLW64 or NO1 F1 fitness band. Pairs and banks its raw data in '
+        'the background, but does not derive anything from it yet — nobody '
+        'on this project owns one to verify its numbers against.',
+    // Null means the plain notify-class pairing — no key, no clock write
+    // needed before the row can be written.
+    pick: null,
+  ),
+  (
+    entry: kDafit,
+    blurb: 'An unbranded DaFit/MOYOUNG-style watch, sold under many storefront '
+        'names. Banks its own data; nothing else derives from it yet.',
+    // Null means the plain notify-class pairing — no key, no clock write
+    // needed before the row can be written. The init handshake runs inside
+    // the adapter's own session, once connected.
+    pick: null,
+  ),
+  (
+    entry: kO2Ring,
+    blurb: 'Reads its battery, model and serial. No SpO2 or pulse reading '
+        'from the ring itself appears anywhere in the app yet.',
+    pick: pairO2Ring,
+  ),
+  (
+    entry: kZeTime,
+    blurb: 'Pairs and connects. Nothing is decoded from it yet beyond its own '
+        'battery level — no one on this project has held one to confirm what '
+        'its other data means.',
+    pick: pairZeTime,
+  ),
+  (
+    entry: kWearFit,
+    blurb: 'A Howear-branded band (HK8 Ultra, HK8 Pro Max and similar), paired '
+        'through the WearFit app family. Banks its own battery report and '
+        'whatever else it sends; nothing else derives from it yet.',
+    // Null means the plain notify-class pairing — no key, no clock, no
+    // handshake needed before the row can be written.
+    pick: null,
+  ),
+  (
+    entry: kRingConn,
+    blurb: 'Pairs directly, no app or account needed. Every sync starts from '
+        'now rather than a saved bookmark, so a sync run right after the '
+        'RingConn app’s own sync can come back looking emptier than expected '
+        '— the ring shares one resume point between whichever app reads it '
+        'first.',
+    // Null means the plain notify-class pairing — the whole handshake lives
+    // inside RingConnAdapter.run, same as kBleHrs.
+    pick: null,
+  ),
+  (
+    entry: kDt78,
+    blurb: 'Pairs and banks its raw data in the background, but does not '
+        'derive anything from it yet — nobody on this project owns one to '
+        'verify its numbers against.',
+    // Null means the plain notify-class pairing, which is the whole of what
+    // this watch needs — no auth, no key.
+    pick: null,
+  ),
+  (
+    entry: kLefun,
+    blurb: 'A generic Bluetooth ring or band from the family sold under many '
+        'storefront names. Pairs and connects, but reports nothing yet — '
+        'nobody on this project has held one to verify what its numbers mean.',
+    // No key, no handshake — plain notify-class pairing, with no measurement
+    // tier: this device declares no signal at all (`LefunAdapter.signals` is
+    // `const {}`), so there is no quality to rank it against another source.
+    pick: (device) => HrsLink.pairNotifySensor(
+      kLefun,
+      device,
+      label: cleanDeviceLabel(device.platformName),
+      tier: null,
+    ),
+  ),
+  (
+    entry: kHPlus,
+    blurb: 'A generic HPlus-family HR band (HPlus, Makibes F68, Zeblaze and '
+        'similar). No account, no handshake — it pairs and banks what it '
+        'sends, but nothing is decoded into a number yet.',
+    // Null: no auth step, so the plain notify-class pairing is the whole of
+    // what this band needs — same as [kBleHrs].
+    pick: null,
+  ),
+  (
+    entry: kPineTime,
+    blurb: 'Pairs and banks its raw data in the background, but does not '
+        'derive anything from it yet — nobody on this project owns one to '
+        'verify its numbers against.',
+    // Null means the plain notify-class pairing, which is the whole of what
+    // this watch needs — no auth, no key.
+    pick: null,
+  ),
+  (
+    entry: kQHybrid,
+    blurb: 'The original Fossil/Skagen hybrid smartwatch line, not the newer '
+        'Hybrid HR. Pairs and connects; nothing derives from it yet.',
+    // NOT plain notify-class pairing (`pick: null`): unlike a heart-rate
+    // strap, which a workout arms, this band has no workout role, so
+    // `pairQHybrid` is what runs its first real session — the adapter's own
+    // battery-probe confirms it is this protocol, not the encrypted Hybrid HR
+    // sibling, and whatever it answers in the bounded window right after is
+    // what gets archived. The same session is re-runnable afterward — see
+    // `qhybrid_link.dart` and this screen's own sync affordance.
+    pick: pairQHybrid,
+  ),
+  (
+    entry: kColmi,
+    blurb: 'A Colmi ring. No account, no handshake — it pairs and banks its '
+        'history, but nothing is decoded into a number yet.',
+    // Null: no auth step, so the plain notify-class pairing is the whole of
+    // what this ring needs — same as [kBleHrs].
+    pick: null,
+  ),
+  (
+    entry: kCasio,
+    blurb: 'GBX100, GW-B5600, GMW-B5000, ECB-S100 and current Casio '
+        'smartwatches. Pairs and connects; nothing derives from it yet.',
+    // Null means the plain notify-class pairing — standard BLE bonding is
+    // the whole of what this watch needs.
+    pick: null,
+  ),
+  (
+    entry: kJyou,
+    blurb: 'Pairs and banks its raw data, but does not derive anything from '
+        'it yet — nobody on this project owns one to verify its numbers '
+        'against.',
+    // Null means the plain notify-class pairing, same as the heart-rate
+    // sensor above.
+    pick: null,
+  ),
+  (
+    entry: kBangleJs,
+    blurb: 'Pairs any Espruino/Nordic-UART device generically, not just '
+        'Bangle.js-branded watches. Banks raw bytes only; nothing is decoded '
+        'into a number.',
+    // Plain notify-class pairing — no handshake to run at pick time.
+    pick: null,
+  ),
 ];
 
 /// Choose which kind of sensor to pair, then hand off to the pairing screen.
 Future<void> addSensor(BuildContext c) async {
+  // Count paired secondary devices (the `device` table minus the primary row).
+  //
+  // PAIRED ROWS, NOT LIVE SLOTS, and deliberately: admission here is a
+  // question about the sensors this phone manages, not about who holds a GATT
+  // link in this instant. Live slot state is transient — `OuraLink` holds one
+  // only from connect through `stop()`, `HrsLink` only for a workout — so
+  // reading it would admit or refuse the same pairing depending on the second
+  // it was tapped, and a slot freed a moment later cannot un-refuse anything.
+  // The same constant bounds both because the number is the same number; the
+  // sentence below states the PAIRING rule, which is the one enforced here.
+  final secondaryCount = (await LocalDb.deviceRows())
+      .where((r) => r['id'] != LocalDb.kPrimaryDeviceId)
+      .length;
+  if (secondaryCount >= kMaxConcurrentSecondaryLinks) {
+    if (!c.mounted) return;
+    // DERIVED FROM THE CONSTANT the check above uses. Hardcoded, the sentence
+    // states a different rule from the one enforced the moment the cap moves.
+    await showReasonSheet(
+        c,
+        AppLocalizations.of(c)
+                ?.devicesSensorLimit(kMaxConcurrentSecondaryLinks) ??
+            'This phone will pair at most $kMaxConcurrentSecondaryLinks '
+                'sensors alongside your band. Remove one to add another.');
+    return;
+  }
+  if (!c.mounted) return;
+  // `includeBand: false` — this phone already has its one primary band;
+  // re-pairing it is `RePair`'s job, not a row beside a chest strap here.
+  await goto(c, const DevicePickerScreen(includeBand: false));
+  // The picker's own sub-screens write a `device` row; nothing tells
+  // AppState that happened.
+  if (c.mounted) await c.read<AppState>().refreshSensors();
+}
+
+/// Ask for a SECOND framed band. iOS cannot show the system pairing sheet while a
+/// CBCentralManager exists in the process, and on an already-paired install
+/// flutter_blue_plus creates one during start-up and never releases it — so the
+/// sheet can only be shown on the next launch, before start-up touches the radio.
+/// This writes the request; `AppState._initSteps` performs it.
+///
+/// NOT surfaced from any visible button in M4 — no second framed band exists yet
+/// to provision against (see MULTIDEVICE_PROGRESS.md's M4 notes). This wires the
+/// plumbing and its test only.
+Future<void> addFramedBand(BuildContext c) async {
+  // ACKED, not fire-and-forget. `Prefs.setBool` updates the cache
+  // OPTIMISTICALLY and never rolls it back (see prefs.dart), and this flag's
+  // whole purpose is to survive the restart the sheet below asks for — a
+  // write that did not land would leave the user following correct
+  // instructions to no effect.
+  final saved = await Prefs.setBoolAcked(Prefs.kAskAddPendingKey, true);
+  if (!c.mounted) return;
+  if (!saved) {
+    await showReasonSheet(
+        c,
+        AppLocalizations.of(c)?.devicesRequestNotSaved ??
+            'That request could not be saved. Please try again.');
+    return;
+  }
+  await showRestartRequiredSheet(c);
+}
+
+/// One-sentence sheet: the ASK ordering constraint, stated where the user is.
+Future<void> showRestartRequiredSheet(BuildContext c) async {
   final p = P.of(c);
-  final choice = await showModalBottomSheet<int>(
+  await showModalBottomSheet<void>(
     context: c,
-    backgroundColor: p.bg,
-    builder: (d) => SafeArea(
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        const SizedBox(height: S.x4),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: S.x4),
-          child: Row(children: [
-            Text(AppLocalizations.of(c)?.devicesAddASensor ?? 'Add a sensor',
-                style: F.t2.copyWith(color: p.ink)),
-          ]),
+    backgroundColor: p.card,
+    showDragHandle: true,
+    builder: (sheet) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(S.x4, S.x2, S.x4, S.x4),
+        child: Text(
+          'iOS can only show the system pairing sheet before the app has used '
+          'Bluetooth. Close OpenStrap completely, then reopen it — the sheet '
+          'appears on its own.',
+          style: F.body.copyWith(color: p.ink),
         ),
-        const SizedBox(height: S.x3),
-        // Same horizontal inset as the header text above and every other
-        // SetRow list in this file (each lives inside a `Surface(pad:
-        // EdgeInsets.symmetric(horizontal: S.x4))`) — without it these rows
-        // ran edge-to-edge against the sheet, the one place in the screen
-        // that broke the convention.
-        for (var i = 0; i < kPairableSensors.length; i++)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: S.x4),
-            child: SetRow(
-              sensorIcon(kPairableSensors[i].entry.id),
-              C.green,
-              kPairableSensors[i].entry.label,
-              sub: kPairableSensors[i].blurb,
-              onTap: () => Navigator.of(d).pop(i),
-            ),
-          ),
-        const SizedBox(height: S.x4),
-      ]),
+      ),
     ),
   );
-  if (choice == null || !c.mounted) return;
-  final sensor = kPairableSensors[choice];
-  await goto(
-    c,
-    PairSensorScreen(entry: sensor.entry, onPicked: sensor.pick),
+}
+
+/// One-sentence sheet giving a reason a requested action was refused.
+Future<void> showReasonSheet(BuildContext c, String reason) async {
+  final p = P.of(c);
+  await showModalBottomSheet<void>(
+    context: c,
+    backgroundColor: p.card,
+    showDragHandle: true,
+    builder: (sheet) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(S.x4, S.x2, S.x4, S.x4),
+        child: Text(reason, style: F.body.copyWith(color: p.ink)),
+      ),
+    ),
   );
-  // The screen writes a `device` row; nothing tells AppState that happened.
-  if (c.mounted) await c.read<AppState>().refreshSensors();
 }
 
 /// Pairing, pushed rather than gated.
@@ -517,7 +1420,11 @@ class RePair extends StatelessWidget {
         if (c.mounted) Navigator.of(c).maybePop();
       });
     }
-    return PairingScreen(onSkip: () => Navigator.of(c).maybePop());
+    // NO `onSkip`. That argument is first-run onboarding's "Skip for now",
+    // and its note says the app opens without a band and nothing is measured
+    // — a sentence about a decision this user made long ago. A re-pair backs
+    // out through `NavBar`'s own back button, exactly as `addSensor` does.
+    return const DevicePickerScreen();
   }
 }
 
@@ -528,12 +1435,20 @@ class MyDevicesView extends StatelessWidget {
   /// The band's own state, from `bandStatusFor`. Null when nothing is paired.
   final BandStatus? status;
 
+  /// Signals two or more paired devices declare — from `contendedSignals`.
+  /// Empty on every single-device install, which keeps the priority-editor
+  /// entry row absent by default (final-plan §4.5).
+  final List<InputSignal> contendedSignals;
+  final VoidCallback? onSignalPriority;
+
   const MyDevicesView({
     super.key,
     this.sources = const [],
     this.onPair,
     this.onAddSensor,
     this.status,
+    this.contendedSignals = const [],
+    this.onSignalPriority,
   });
 
   @override
@@ -622,6 +1537,20 @@ class MyDevicesView extends StatelessWidget {
                             'A heart-rate strap or a ring, alongside the band',
                         onTap: onAddSensor),
                   ),
+                // ONLY when something can actually contend. A reorder screen
+                // over one device is a control with nothing to order, which is
+                // the empty-rung problem this screen already refuses (§6.5).
+                if (contendedSignals.isNotEmpty && onSignalPriority != null) ...[
+                  const SizedBox(height: S.x3),
+                  Surface(
+                    pad: const EdgeInsets.symmetric(horizontal: S.x4),
+                    child: SetRow(LucideIcons.arrowUpDown, C.blue,
+                        l?.devicesWhichSourceWins ?? 'Which source wins',
+                        sub: l?.devicesWhichSourceWinsSub ??
+                            'When two of your devices measure the same thing',
+                        onTap: onSignalPriority),
+                  ),
+                ],
                 // NOT YET — removed from this screen per product decision
                 // (owner's call, live review). `kNotYet`/`NotYet` still hold
                 // the reasons and permanences below; only the render is gone.
@@ -897,7 +1826,35 @@ class _DeviceDetailState extends State<DeviceDetail> {
       // primary band's link, its restore identity and its trim cursor, none of
       // which a sensor has — pointing this at it would have unpaired the
       // WHOOP from a chest strap's page.
-      onSync: s.family == 'oura' ? () => _syncRing(c) : null,
+      onSync: switch (s.family) {
+        'oura' || 'ringconn' || 'o2ring' || 'ring11m' =>
+          () => _syncRing(c, s.family),
+        'coros' => () => _syncCorosWatch(c),
+        'garmin' => () => _syncGarminWatch(c),
+        'ultrahuman' => () => _syncUltrahumanRing(c),
+        'miband234' => () => _syncMiband(c),
+        'dafit' => () => _syncDafitWatch(c),
+        'zetime' => () => _syncZeTime(c),
+        'wearfit' => () => _syncSensor(c, WearFitLink.instance.sync),
+        'withings_steel_hr' =>
+          () => _syncSensor(c, WithingsSteelHrLink.instance.sync),
+        'dt78' => () => _syncDt78(c),
+        'hplus' => () => _syncHPlus(c),
+        'id115' => () => _syncId115(c),
+        'makibeshr3' => () => _syncMakibesHr3(c),
+        'pebble' => () => _syncPebble(c),
+        'pinetime' => () => _syncPineTime(c),
+        'qhybrid' => () => _syncQHybrid(c),
+        'colmi' => () => _syncColmiRing(c),
+        'casio' => () => _syncCasio(c, s.deviceId),
+        'jyou' => () => _syncJyou(c),
+        'tlw64' => () => _syncNo1Band(c),
+        'watch9' => () => _syncWatch9(c),
+        'xwatch' => () => _syncXWatch(c),
+        'smaq2oss' => () => _syncSmaq2oss(c),
+        'banglejs' => () => _syncBangleJs(c),
+        _ => null,
+      },
       onForget: s.deviceId != null
           ? () => _confirmForgetSensor(c, s)
           : app == null
@@ -910,12 +1867,21 @@ class _DeviceDetailState extends State<DeviceDetail> {
 /// Drain the ring, now, because the user asked. The result is a sentence
 /// either way: a sync that silently did nothing is indistinguishable from a
 /// ring that had nothing to give, and those need different remedies.
-Future<void> _syncRing(BuildContext c) async {
+///
+/// [family] picks WHICH ring's link runs — a plain equality dispatch rather
+/// than a generic "ring link" interface, because there are only a handful of
+/// these today and a lot more makes this a `switch`, not an abstraction.
+Future<void> _syncRing(BuildContext c, String? family) async {
   final l = AppLocalizations.of(c);
   final messenger = ScaffoldMessenger.maybeOf(c);
   messenger?.showSnackBar(
       SnackBar(content: Text(l?.devicesSyncingTheRing ?? 'Syncing the ring…')));
-  final ok = await OuraLink.instance.sync();
+  final ok = switch (family) {
+    'o2ring' => await O2RingLink.instance.sync(),
+    'ringconn' => await RingConnLink.instance.sync(),
+    'ring11m' => await Ring11mLink.instance.sync(),
+    _ => await OuraLink.instance.sync(),
+  };
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
@@ -923,6 +1889,421 @@ Future<void> _syncRing(BuildContext c) async {
         : (l?.devicesCouldNotReachRing ??
             'Could not reach the ring. It has to be nearby, and not connected '
                 'to another app.')),
+  ));
+}
+
+/// Hold a session with the paired watch, now, because the user asked. There
+/// is no history to drain here — see `coros_link.dart`'s own header — so this
+/// just refreshes the battery/identity status and banks whatever heart rate
+/// arrives during it.
+Future<void> _syncCorosWatch(BuildContext c) async {
+  final l = AppLocalizations.of(c);
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  final ok = await CorosLink.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? (l?.devicesSynced ?? 'Synced.')
+        // Its OWN string, not the ring's — `devicesCouldNotReachRing` names
+        // the device in its text, and a watch synced through here is not one.
+        : (l?.devicesCouldNotReachCorosWatch ??
+            'Could not reach it. It has to be nearby, and not connected to '
+                'another app.')),
+  ));
+}
+
+/// Hold a session with the paired watch, now, because the user asked. There
+/// is no stored history drained here — see `garmin_link.dart`'s own header —
+/// so this just reopens the GFDI channel and banks whatever the device-info
+/// push and one battery answer give it.
+Future<void> _syncGarminWatch(BuildContext c) async {
+  final l = AppLocalizations.of(c);
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  final ok = await GarminLink.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? (l?.devicesSynced ?? 'Synced.')
+        : (l?.devicesCouldNotReachRing ??
+            'Could not reach it. It has to be nearby, and not connected to '
+                'another app.')),
+  ));
+}
+
+/// Drain the Ultrahuman ring, now, because the user asked. Same shape as
+/// [_syncRing] — a separate function rather than a shared one parametrised on
+/// the link, because the two links are two distinct types with nothing to
+/// abstract over for a single button's tap handler.
+Future<void> _syncUltrahumanRing(BuildContext c) async {
+  final l = AppLocalizations.of(c);
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(
+      SnackBar(content: Text(l?.devicesSyncingTheRing ?? 'Syncing the ring…')));
+  final ok = await UltrahumanLink.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? (l?.devicesSynced ?? 'Synced.')
+        : (l?.devicesCouldNotReachRing ??
+            'Could not reach the ring. It has to be nearby, and not connected '
+                'to another app.')),
+  ));
+}
+
+/// Drain the Mi Band, now, because the user asked. Same shape as
+/// [_syncRing]: a bounded-window snapshot (no cursor, see
+/// `MiBand234Link`'s own header), so "synced" here means "connected and
+/// collected what the window allowed", not "drained everything".
+Future<void> _syncMiband(BuildContext c) async {
+  final l = AppLocalizations.of(c);
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(
+      SnackBar(content: Text(l?.devicesSyncing ?? 'Syncing')));
+  final ok = await MiBand234Link.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? (l?.devicesSynced ?? 'Synced.')
+        : 'Could not reach the band. It has to be nearby, and not '
+            'connected to another app.'),
+  ));
+}
+
+/// Drain the watch, now, because the user asked. Nothing decodes yet — see
+/// `pebble.dart`'s header — so a successful sync only ever means "bytes were
+/// banked to raw_archive", never a new reading anywhere on screen.
+Future<void> _syncPebble(BuildContext c) async {
+  final l = AppLocalizations.of(c);
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(const SnackBar(content: Text('Syncing the watch…')));
+  final ok = await PebbleLink.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? (l?.devicesSynced ?? 'Synced.')
+        : 'Could not reach the watch. It has to be nearby, and not '
+            'connected to another app.'),
+  ));
+}
+
+/// Pull whatever a paired Makibes HR3 has sent since the last connect, now,
+/// because the user asked. Same shape as [_syncRing] one function up.
+Future<void> _syncMakibesHr3(BuildContext c) async {
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  final ok = await MakibesHr3Link.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? 'Synced.'
+        : 'Could not reach the board. It has to be nearby, and not '
+            'connected to another app.'),
+  ));
+}
+
+/// Pull whatever a paired ID115 has sent since the last connect, now,
+/// because the user asked. Same shape as [_syncRing] one function up.
+Future<void> _syncId115(BuildContext c) async {
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  final ok = await Id115Link.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? 'Synced.'
+        : 'Could not reach the board. It has to be nearby, and not '
+            'connected to another app.'),
+  ));
+}
+
+/// Pull whatever a paired SMA-Q2-OSS has sent since the last connect, now,
+/// because the user asked. Same shape as [_syncRing] one function up.
+Future<void> _syncSmaq2oss(BuildContext c) async {
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  final ok = await Smaq2ossLink.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? 'Synced.'
+        : 'Could not reach the watch. It has to be nearby, and not '
+            'connected to another app.'),
+  ));
+}
+
+/// Pull whatever a paired XWatch has sent since the last connect, now,
+/// because the user asked. Same shape as [_syncRing] one function up.
+Future<void> _syncXWatch(BuildContext c) async {
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  final ok = await XWatchLink.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? 'Synced.'
+        : 'Could not reach the board. It has to be nearby, and not '
+            'connected to another app.'),
+  ));
+}
+
+/// Pull whatever a paired Watch9 has sent since the last connect, now,
+/// because the user asked. Same shape as [_syncRing] one function up.
+Future<void> _syncWatch9(BuildContext c) async {
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  final ok = await Watch9Link.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? 'Synced.'
+        : 'Could not reach the board. It has to be nearby, and not '
+            'connected to another app.'),
+  ));
+}
+
+/// Pull whatever a paired NO1-family band has sent since the last connect,
+/// now, because the user asked. Same shape as [_syncRing] one function up.
+Future<void> _syncNo1Band(BuildContext c) async {
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  final ok = await Tlw64Link.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? 'Synced.'
+        : 'Could not reach the band. It has to be nearby, and not connected '
+            'to another app.'),
+  ));
+}
+
+/// Hold a session with the paired watch, now, because the user asked. There
+/// is no history to drain here — see `dafit_link.dart`'s own header — so
+/// this just runs the handshake again and banks whatever arrives during it.
+Future<void> _syncDafitWatch(BuildContext c) async {
+  final l = AppLocalizations.of(c);
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  // No localized string yet — same call as device_picker.dart's 'dafit'
+  // blurb, and for the same reason. Deliberately NOT `devicesCouldNotReachRing`
+  // below either: that key is ring-specific text in every translated locale,
+  // and this device is a watch, not a ring.
+  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  final ok = await DafitLink.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? (l?.devicesSynced ?? 'Synced.')
+        : 'Could not reach it. It has to be nearby, and not connected to '
+            'another app.'),
+  ));
+}
+
+/// Connect to the ZeTime, ask its battery level, disconnect — the whole of
+/// what this band does today. Same "say something either way" reasoning as
+/// [_syncRing]: a silent no-op looks identical to a watch with nothing to
+/// give, and those need different remedies.
+Future<void> _syncZeTime(BuildContext c) async {
+  final l = AppLocalizations.of(c);
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(SnackBar(
+      content: Text(l?.devicesConnectingZeTime ?? 'Connecting…')));
+  final ok = await ZeTimeLink.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? (l?.devicesConnectedZeTime ?? 'Connected.')
+        : (l?.devicesCouldNotReachZeTime ??
+            'Could not reach the watch. It has to be nearby, and not '
+                'connected to another app.')),
+  ));
+}
+
+/// Connect to the paired watch and give it a window to say whatever it is
+/// going to say, now, because the user asked. Same shape as [_syncRing]: a
+/// sync that silently did nothing is indistinguishable from a watch with
+/// nothing to give, and those need different remedies.
+Future<void> _syncBangleJs(BuildContext c) async {
+  final l = AppLocalizations.of(c);
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(SnackBar(
+      content: Text(l?.devicesSyncingTheWatch ?? 'Syncing the watch…')));
+  final ok = await BangleJsLink.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? (l?.devicesSynced ?? 'Synced.')
+        : (l?.devicesCouldNotReachWatch ??
+            'Could not reach the watch. It has to be nearby, and not '
+                'connected to another app.')),
+  ));
+}
+
+/// Drain any other paired sensor family, now, because the user asked. Same
+/// promise as [_syncRing], generalized past the ring-specific wording — a
+/// WearFit band is not a ring.
+Future<void> _syncSensor(BuildContext c, Future<bool> Function() sync) async {
+  final l = AppLocalizations.of(c);
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(SnackBar(
+      content:
+          Text(l?.devicesSyncingTheSensor ?? 'Syncing the sensor…')));
+  final ok = await sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? (l?.devicesSynced ?? 'Synced.')
+        : (l?.devicesCouldNotReachSensor ??
+            'Could not reach the sensor. It has to be nearby, and not '
+                'connected to another app.')),
+  ));
+}
+
+/// Connect and bank the watch's raw bytes, now, because the user asked. Same
+/// shape as [_syncRing] — a separate family behind a separate link, same
+/// reason a sync that did nothing needs to say so.
+Future<void> _syncDt78(BuildContext c) async {
+  final l = AppLocalizations.of(c);
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  // Checked BEFORE calling sync(), which answers `false` for "already
+  // syncing" and "could not reach the watch" alike — a real distinction the
+  // snack bar should not blur into one failure sentence.
+  if (Dt78Link.instance.busy) {
+    messenger?.showSnackBar(const SnackBar(content: Text('Already syncing.')));
+    return;
+  }
+  // `devicesSyncing`/`devicesSynced` are genuinely generic ("Syncing"/
+  // "Synced."), unlike `devicesSyncingTheRing`/`devicesCouldNotReachRing`,
+  // which name the ring by copy — reusing those here would show the wrong
+  // device in the snack bar, so the failure sentence stays untranslated
+  // rather than borrowing one that says the wrong thing.
+  messenger?.showSnackBar(
+      SnackBar(content: Text(l?.devicesSyncing ?? 'Syncing')));
+  final ok = await Dt78Link.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? (l?.devicesSynced ?? 'Synced.')
+        : 'Could not reach the watch. It has to be nearby, and not connected '
+            'to another app.'),
+  ));
+}
+
+/// Connect to the band, now, because the user asked. Same "one sentence
+/// either way" shape as [_syncRing] — a sync that reached the band and one
+/// that could not are different remedies for the user.
+Future<void> _syncHPlus(BuildContext c) async {
+  final l = AppLocalizations.of(c);
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(
+      SnackBar(content: Text(l?.devicesSyncing ?? 'Syncing')));
+  final ok = await HPlusLink.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? (l?.devicesSynced ?? 'Synced.')
+        : 'Could not reach the band. It has to be nearby, and not connected '
+            'to another app.'),
+  ));
+}
+
+/// Pull whatever a Jyou band has streamed since the last connect, now,
+/// because the user asked. Same shape as [_syncRing] one function up.
+Future<void> _syncJyou(BuildContext c) async {
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  final ok = await JyouLink.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? 'Synced.'
+        : 'Could not reach the band. It has to be nearby, and not connected '
+            'to another app.'),
+  ));
+}
+
+/// Connect and bank the watch's raw bytes, now, because the user asked. Same
+/// shape as [_syncRing] — a sync that silently did nothing is
+/// indistinguishable from a watch that had nothing to give, and those need
+/// different remedies.
+Future<void> _syncPineTime(BuildContext c) async {
+  final l = AppLocalizations.of(c);
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  // `devicesSyncing`/`devicesSynced` are genuinely generic ("Syncing"/
+  // "Synced."), unlike `devicesSyncingTheRing`/`devicesCouldNotReachRing`,
+  // which name the ring by copy — reusing those here would show the wrong
+  // device in the snack bar, so the failure sentence stays untranslated
+  // rather than borrowing one that says the wrong thing.
+  messenger?.showSnackBar(
+      SnackBar(content: Text(l?.devicesSyncing ?? 'Syncing')));
+  final ok = await PineTimeLink.instance.sync();
+  if (!c.mounted) return;
+  messenger?.hideCurrentSnackBar();
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? (l?.devicesSynced ?? 'Synced.')
+        : 'Could not reach the watch. It has to be nearby, and not connected '
+            'to another app.'),
+  ));
+}
+
+/// Hold a session with the paired watch, now, because the user asked. There
+/// is no history to drain here — see `qhybrid_link.dart`'s own header — so
+/// this just re-runs the same battery-probe-confirmed window pairing did and
+/// banks whatever the watch sends during it.
+Future<void> _syncQHybrid(BuildContext c) async {
+  final l = AppLocalizations.of(c);
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(
+      SnackBar(content: Text(l?.devicesConnectingWatch ?? 'Connecting…')));
+  final ok = await QHybridLink.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? (l?.devicesSynced ?? 'Synced.')
+        : (l?.devicesCouldNotReachWatch ??
+            'Could not reach the watch. It has to be nearby, and not '
+                'connected to another app.')),
+  ));
+}
+
+/// Same as [_syncRing], for a paired Colmi ring — the "sync now" affordance
+/// this device was missing entirely (it paired and never synced again).
+/// Shares the ring-generic strings above rather than minting Colmi-specific
+/// copy for the same sentence.
+Future<void> _syncColmiRing(BuildContext c) async {
+  final l = AppLocalizations.of(c);
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(
+      SnackBar(content: Text(l?.devicesSyncingTheRing ?? 'Syncing the ring…')));
+  final ok = await ColmiLink.instance.sync();
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? (l?.devicesSynced ?? 'Synced.')
+        : (l?.devicesCouldNotReachRing ??
+            'Could not reach the ring. It has to be nearby, and not connected '
+                'to another app.')),
+  ));
+}
+
+/// Same shape as [_syncRing] — a separate family behind a separate link, same
+/// reason a sync that did nothing needs to say so. [deviceId] is this row's
+/// own id: two Casio watches can be paired at once, and without it this
+/// always synced whichever one `CasioLink.pairedRow()` happened to see first.
+Future<void> _syncCasio(BuildContext c, String? deviceId) async {
+  final l = AppLocalizations.of(c);
+  final messenger = ScaffoldMessenger.maybeOf(c);
+  messenger?.showSnackBar(
+      SnackBar(content: Text(l?.devicesSyncing ?? 'Syncing')));
+  final ok = await CasioLink.instance.sync(deviceId: deviceId);
+  if (!c.mounted) return;
+  messenger?.showSnackBar(SnackBar(
+    content: Text(ok
+        ? (l?.devicesSynced ?? 'Synced.')
+        : (l?.devicesCouldNotReachWatch ??
+            'Could not reach the watch. It has to be nearby, and not '
+                'connected to another app.')),
   ));
 }
 
@@ -1207,8 +2588,20 @@ class DeviceDetailView extends StatelessWidget {
                         Divider(color: p.line, height: 1),
                         SetRow(LucideIcons.downloadCloud, C.blue,
                             l?.devicesSyncNow ?? 'Sync now',
-                            sub: l?.devicesSyncNowSub ??
-                                'Fetch whatever it has been holding',
+                            // Only Oura genuinely fetches held history off a
+                            // cursor; every other `onSync` wired today is a
+                            // bounded listen window with no request and no
+                            // stored-history drain — see e.g.
+                            // `Id115Link.sync()`, `MakibesHr3Link.sync()`,
+                            // `Smaq2ossLink.sync()`, `Tlw64Link.sync()`,
+                            // `Watch9Link.sync()` and `XWatchLink.sync()`.
+                            // Claiming a "fetch" for those would be a promise
+                            // the connect does not keep.
+                            sub: s.family == 'oura'
+                                ? (l?.devicesSyncNowSub ??
+                                    'Fetch whatever it has been holding')
+                                : (l?.devicesSyncNowSubListen ??
+                                    'Listen for whatever it sends right now'),
                             onTap: onSync),
                       ],
                     ]),

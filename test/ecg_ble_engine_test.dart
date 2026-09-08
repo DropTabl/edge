@@ -23,6 +23,8 @@ Uint8List _helloBody({int revision = 1, int optical = 0}) {
   v.setUint32(1, 900, Endian.little);
   v.setUint32(6, DateTime.now().millisecondsSinceEpoch ~/ 1000, Endian.little);
   for (var i = 0; i < 10; i++) {
+    // Synthetic, not a real strap: the serial is 10 ASCII bytes at offset 14
+    // and nothing here depends on its value.
     body[14 + i] = '5AM0000000'.codeUnitAt(i);
   }
   v.setUint32(79, 13, Endian.little);

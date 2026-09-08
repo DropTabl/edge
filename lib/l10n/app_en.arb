@@ -646,6 +646,18 @@
   "@devicesAddASensorSub": {
     "description": "Row sub."
   },
+  "devicesWhichSourceWins": "Which source wins",
+  "@devicesWhichSourceWins": {
+    "description": "Row title: opens the per-signal priority editor."
+  },
+  "devicesWhichSourceWinsSub": "When two of your devices measure the same thing",
+  "@devicesWhichSourceWinsSub": {
+    "description": "Row sub for the priority-editor entry."
+  },
+  "devicesResetToDefault": "Back to the default order",
+  "@devicesResetToDefault": {
+    "description": "Per-signal reset-to-physics-ladder action in the priority editor."
+  },
   "devicesMySources": "My sources",
   "@devicesMySources": {
     "description": "Screen title."
@@ -750,6 +762,46 @@
   "devicesCouldNotReachRing": "Could not reach the ring. It has to be nearby, and not connected to another app.",
   "@devicesCouldNotReachRing": {
     "description": "Snackbar: sync failed."
+  },
+  "devicesCouldNotReachCorosWatch": "Could not reach it. It has to be nearby, and not connected to another app.",
+  "@devicesCouldNotReachCorosWatch": {
+    "description": "Snackbar: sync failed, for a paired Coros watch."
+  },
+  "devicesSyncingTheWatch": "Syncing the watch…",
+  "@devicesSyncingTheWatch": {
+    "description": "Snackbar: syncing Bangle.js."
+  },
+  "devicesConnectingZeTime": "Connecting…",
+  "@devicesConnectingZeTime": {
+    "description": "Snackbar: connecting to the ZeTime."
+  },
+  "devicesConnectedZeTime": "Connected.",
+  "@devicesConnectedZeTime": {
+    "description": "Snackbar: ZeTime connect succeeded."
+  },
+  "devicesCouldNotReachZeTime": "Could not reach the watch. It has to be nearby, and not connected to another app.",
+  "@devicesCouldNotReachZeTime": {
+    "description": "Snackbar: ZeTime connect failed."
+  },
+  "devicesSyncingTheSensor": "Syncing the sensor…",
+  "@devicesSyncingTheSensor": {
+    "description": "Snackbar: syncing a paired non-ring sensor (e.g. WearFit)."
+  },
+  "devicesCouldNotReachSensor": "Could not reach the sensor. It has to be nearby, and not connected to another app.",
+  "@devicesCouldNotReachSensor": {
+    "description": "Snackbar: sensor sync failed."
+  },
+  "devicesConnectingWatch": "Connecting…",
+  "@devicesConnectingWatch": {
+    "description": "Snackbar: connecting to the watch."
+  },
+  "devicesCouldNotReachWatch": "Could not reach the watch. It has to be nearby, and not connected to another app.",
+  "@devicesCouldNotReachWatch": {
+    "description": "Snackbar: sync failed."
+  },
+  "deviceFilterAllDevices": "All devices",
+  "@deviceFilterAllDevices": {
+    "description": "First pill in a metric screen's per-device filter — the merged view."
   },
   "devicesForgetSensor": "Forget {name}?",
   "@devicesForgetSensor": {
@@ -857,7 +909,11 @@
   },
   "devicesSyncNowSub": "Fetch whatever it has been holding",
   "@devicesSyncNowSub": {
-    "description": "Row sub: manual sync."
+    "description": "Row sub: manual sync, for a sensor that fetches held history off a cursor (e.g. Oura)."
+  },
+  "devicesSyncNowSubListen": "Listen for whatever it sends right now",
+  "@devicesSyncNowSubListen": {
+    "description": "Row sub: manual sync, for a sensor that only opens a bounded listen window with no history fetch."
   },
   "devicesName": "Name",
   "@devicesName": {
@@ -923,13 +979,105 @@
   "@pairSensorExplainer": {
     "description": "Explanatory body."
   },
-  "pairSensorSearchWouldHideSheet": "Searching would hide the WHOOP pairing sheet",
+  "pairSensorSearchWouldHideSheet": "Searching would hide the system pairing sheet",
   "@pairSensorSearchWouldHideSheet": {
     "description": "iOS-gate status card title."
   },
   "pairSensorSearchAnyway": "Search anyway",
   "@pairSensorSearchAnyway": {
     "description": "iOS-gate status card fix."
+  },
+  "devicePickerTitle": "Connect your devices",
+  "@devicePickerTitle": {
+    "description": "Unified pairing screen title."
+  },
+  "devicePickerSubtitle": "Bring whatever you use. You can add more anytime.",
+  "@devicePickerSubtitle": {
+    "description": "Unified pairing screen subtitle."
+  },
+  "devicePickerBrowseByCategory": "Browse by category",
+  "@devicePickerBrowseByCategory": {
+    "description": "Section header over the device category list."
+  },
+  "devicePickerPrivacyNote": "Everything stays on this phone. Nothing is sent anywhere unless you choose to export it.",
+  "@devicePickerPrivacyNote": {
+    "description": "Footer privacy note on the device picker."
+  },
+  "devicePickerSearchLabel": "Search devices or types",
+  "@devicePickerSearchLabel": {
+    "description": "Accessibility label for the device picker's search field."
+  },
+  "devicePickerSearchHint": "Search devices or types",
+  "@devicePickerSearchHint": {
+    "description": "Placeholder text in the device picker's search field."
+  },
+  "devicePickerNothingNearbyTitle": "Nothing found yet",
+  "@devicePickerNothingNearbyTitle": {
+    "description": "Status card title when the live scan has found nothing."
+  },
+  "devicePickerNothingNearbyBody": "A device answers only while it is awake, worn, and not already connected to another phone or app.",
+  "@devicePickerNothingNearbyBody": {
+    "description": "Status card body when the live scan has found nothing."
+  },
+  "devicePickerNearby": "Nearby",
+  "@devicePickerNearby": {
+    "description": "Section header over live scan results."
+  },
+  "devicePickerScanning": "Scanning for devices nearby…",
+  "@devicePickerScanning": {
+    "description": "Row shown while the live scan is running."
+  },
+  "devicePickerBlurbBand": "The strap this app is built around. WHOOP 4 or 5.",
+  "@devicePickerBlurbBand": {
+    "description": "Category row subtitle for the WHOOP band."
+  },
+  "devicePickerBlurbRing": "Reads the ring directly — no Oura account or subscription.",
+  "@devicePickerBlurbRing": {
+    "description": "Category row subtitle for the Oura ring."
+  },
+  "devicePickerBlurbPolarPmd": "A Polar Verity Sense or OH1. Beat timing measured optically, streamed during a workout, same as a chest strap.",
+  "@devicePickerBlurbPolarPmd": {
+    "description": "Category row subtitle for a Polar PMD optical sensor."
+  },
+  "devicePickerBlurbO2Ring": "Reads its battery, model and serial. No reading from the ring itself is decoded yet.",
+  "@devicePickerBlurbO2Ring": {
+    "description": "Category row subtitle for the Wellue O2Ring."
+  },
+  "devicePickerBlurbWearFit": "A Howear-branded band, paired through the WearFit app family.",
+  "@devicePickerBlurbWearFit": {
+    "description": "Category row subtitle for a WearFit-family band."
+  },
+  "devicePickerBlurbSensor": "A chest strap or armband, for beat timing during a workout.",
+  "@devicePickerBlurbSensor": {
+    "description": "Category row subtitle for a standard Bluetooth heart-rate sensor."
+  },
+  "devicePickerBlurbCoros": "A sports watch. Reads battery and live heart rate — recorded activities stay on the watch.",
+  "@devicePickerBlurbCoros": {
+    "description": "Category row subtitle for a Coros sports watch."
+  },
+  "devicePickerBlurbWithingsSteelHr": "Pairs and connects — nothing it captures is decoded into a number yet.",
+  "@devicePickerBlurbWithingsSteelHr": {
+    "description": "Category row subtitle for the Withings Steel HR / Activité."
+  },
+  "devicePickerBlurbMiband234": "A Mi Band 2, 3 or 4. Pairs and connects; nothing derives from it yet.",
+  "@devicePickerBlurbMiband234": {
+    "description": "Category row subtitle for a Mi Band 2/3/4."
+  },
+  "devicePickerBlurbZeTime": "Pairs and connects. Nothing is decoded from it yet beyond its own battery level.",
+  "@devicePickerBlurbZeTime": {
+    "description": "Category row subtitle for the MyKronoz ZeTime."
+  },
+  "devicePickerBlurbColmi": "A Colmi ring. Pairs and banks its history; nothing is decoded into a number yet.",
+  "@devicePickerBlurbColmi": {
+    "description": "Category row subtitle for a Colmi smart ring."
+  },
+  "devicePickerBlurbBangleJs": "Pairs any Espruino/Nordic-UART device generically, not just Bangle.js-branded watches. Banks raw bytes only; nothing is decoded into a number.",
+  "@devicePickerBlurbBangleJs": {
+    "description": "Category row subtitle for Bangle.js and other Nordic-UART devices."
+  },
+  "devicePickerCannotPairFromHere": "That device cannot be paired from this screen.",
+  "@devicePickerCannotPairFromHere": {
+    "description": "Shown when a tapped category has no pairing step behind it."
   },
   "pairSensorSearching": "Searching…",
   "@pairSensorSearching": {
@@ -3431,6 +3579,13 @@
   "@dayTimelineTaggedTitle": {
     "description": "Fallback day-note title when a journal entry has tags but no written note."
   },
+  "dayTimelineDeviceBounded": "Per-device detail is kept for recent days only. Before {oldest} we know which device recorded, not what it said.",
+  "@dayTimelineDeviceBounded": {
+    "description": "Copy shown instead of a per-device curve when the day is outside decoded_onehz retention.",
+    "placeholders": {
+      "oldest": {"type": "String"}
+    }
+  },
   "dayTimelineTitle": "Breakdown of your day",
   "@dayTimelineTitle": {
     "description": "Day timeline screen title."
@@ -5411,6 +5566,55 @@
         "type": "String"
       },
       "unit": {
+        "type": "String"
+      }
+    }
+  },
+  "metricDetailUsingForX": "Using {device} for {metric}.",
+  "@metricDetailUsingForX": {
+    "description": "Which device currently feeds one metric, under the device filter row.",
+    "placeholders": {
+      "device": {"type": "String"},
+      "metric": {"type": "String"}
+    }
+  },
+  "metricDetailPreferX": "Prefer {device}",
+  "@metricDetailPreferX": {
+    "description": "Button: make the selected device win this metric's signal(s).",
+    "placeholders": {
+      "device": {"type": "String"}
+    }
+  },
+  "metricDetailHistoryKeepsSource": "Days already finished keep the source they were calculated with.",
+  "@metricDetailHistoryKeepsSource": {
+    "description": "Copy under the device-preference control explaining a priority change is not retroactive."
+  },
+  "metricDetailDimmedCaption": "These are the days {device} was involved. The line is your merged reading.",
+  "@metricDetailDimmedCaption": {
+    "description": "Caption under a metric-detail chart when a device pill is selected and dims non-contributing days.",
+    "placeholders": {
+      "device": {
+        "type": "String"
+      }
+    }
+  },
+  "metricDetailSlotNoValueRecording": "{day}, no value · {who}",
+  "@metricDetailSlotNoValueRecording": {
+    "description": "Screen-reader readout for a chart slot with no value but something was recording (multi-device only).",
+    "placeholders": {
+      "day": {
+        "type": "String"
+      },
+      "who": {
+        "type": "String"
+      }
+    }
+  },
+  "metricDetailSlotNothingRecording": "{day}, nothing was recording",
+  "@metricDetailSlotNothingRecording": {
+    "description": "Screen-reader readout for a chart slot with no value and nothing recording (multi-device only).",
+    "placeholders": {
+      "day": {
         "type": "String"
       }
     }
@@ -11732,6 +11936,97 @@
   "nudgeDontShowAgain": "Don't show this again",
   "@nudgeDontShowAgain": {
     "description": "Label and semantic label for the button that permanently dismisses a Home community nudge."
+  },
+  "signalRrIntervals": "Beat-to-beat intervals",
+  "@signalRrIntervals": {
+    "description": "Human name for the rrIntervals input signal."
+  },
+  "signalHr1Hz": "Continuous heart rate",
+  "@signalHr1Hz": {
+    "description": "Human name for the hr1Hz input signal."
+  },
+  "signalHrSparse": "Heart rate",
+  "@signalHrSparse": {
+    "description": "Human name for the hrSparse input signal."
+  },
+  "signalAccel1Hz": "Movement",
+  "@signalAccel1Hz": {
+    "description": "Human name for the accel1Hz input signal."
+  },
+  "signalAccelHighRate": "High-rate movement",
+  "@signalAccelHighRate": {
+    "description": "Human name for the accelHighRate input signal."
+  },
+  "signalPpgGreen": "Green PPG",
+  "@signalPpgGreen": {
+    "description": "Human name for the ppgGreen input signal."
+  },
+  "signalPpgRedIr": "Red/infrared PPG",
+  "@signalPpgRedIr": {
+    "description": "Human name for the ppgRedIr input signal."
+  },
+  "signalSkinTempRaw": "Skin temperature",
+  "@signalSkinTempRaw": {
+    "description": "Human name for the skinTempRaw input signal."
+  },
+  "signalVendorScalars": "The device\u2019s own numbers",
+  "@signalVendorScalars": {
+    "description": "Human name for the vendorScalars input signal."
+  },
+  "missingSignalRrIntervals": "no beat-to-beat intervals",
+  "@missingSignalRrIntervals": {
+    "description": "Sub-label on a device that cannot serve a metric because its hardware does not report beat-to-beat intervals. Names the physical absence, not the metric. Lower case: it is appended after the device name and a middle dot."
+  },
+  "missingSignalHr1Hz": "no continuous heart rate",
+  "@missingSignalHr1Hz": {
+    "description": "Sub-label on a device that cannot serve a metric because its hardware does not report continuous heart rate. Names the physical absence, not the metric. Lower case: it is appended after the device name and a middle dot."
+  },
+  "missingSignalHrSparse": "no heart rate",
+  "@missingSignalHrSparse": {
+    "description": "Sub-label on a device that cannot serve a metric because its hardware does not report heart rate at all. Names the physical absence, not the metric. Lower case: it is appended after the device name and a middle dot."
+  },
+  "missingSignalAccel1Hz": "no accelerometer",
+  "@missingSignalAccel1Hz": {
+    "description": "Sub-label on a device that cannot serve a metric because it has no accelerometer. Names the physical absence, not the metric. Lower case: it is appended after the device name and a middle dot."
+  },
+  "missingSignalAccelHighRate": "no high-rate accelerometer",
+  "@missingSignalAccelHighRate": {
+    "description": "Sub-label on a device that cannot serve a metric because its accelerometer does not report at a high sample rate. Names the physical absence, not the metric. Lower case: it is appended after the device name and a middle dot."
+  },
+  "missingSignalPpgGreen": "no green PPG",
+  "@missingSignalPpgGreen": {
+    "description": "Sub-label on a device that cannot serve a metric because it has no green photoplethysmography (optical) sensor. Names the physical absence, not the metric. Lower case: it is appended after the device name and a middle dot."
+  },
+  "missingSignalPpgRedIr": "no red/infrared PPG",
+  "@missingSignalPpgRedIr": {
+    "description": "Sub-label on a device that cannot serve a metric because it has no red or infrared photoplethysmography (optical) sensor. Names the physical absence, not the metric. Lower case: it is appended after the device name and a middle dot."
+  },
+  "missingSignalSkinTempRaw": "no temperature sensor",
+  "@missingSignalSkinTempRaw": {
+    "description": "Sub-label on a device that cannot serve a metric because it has no skin temperature sensor. Names the physical absence, not the metric. Lower case: it is appended after the device name and a middle dot."
+  },
+  "missingSignalVendorScalars": "reports nothing of its own",
+  "@missingSignalVendorScalars": {
+    "description": "Sub-label on a device that cannot serve a metric because it publishes no pre-computed numbers of its own (only raw sensor signals). Names the physical absence, not the metric. Lower case: it is appended after the device name and a middle dot."
+  },
+  "missingSignalUnknown": "cannot supply this",
+  "@missingSignalUnknown": {
+    "description": "Fallback sub-label on a device that cannot serve a metric when no specific missing sensor can be named. Lower case: it is appended after the device name and a middle dot."
+  },
+  "devicesSensorLimit": "{count, plural, =1{One sensor is the most this phone will pair alongside your band. Remove it to add another.} other{This phone will pair at most {count} sensors alongside your band. Remove one to add another.}}",
+  "@devicesSensorLimit": {
+    "description": "Refusal shown when the paired-sensor cap is already reached.",
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "devicesOrderNotSaved": "That order could not be saved. Nothing changed.",
+  "@devicesOrderNotSaved": {
+    "description": "Shown when a signal-priority write fails."
+  },
+  "devicesRequestNotSaved": "That request could not be saved. Please try again.",
+  "@devicesRequestNotSaved": {
+    "description": "Shown when the add-a-band restart request could not be persisted."
   },
   "ecgTitle": "ECG",
   "@ecgTitle": {
