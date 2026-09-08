@@ -28,9 +28,11 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openstrap_edge/sync/reset_gate.dart';
 
 void main() {
   final src = File('lib/state/app_state.dart').readAsStringSync();
+  final bg = File('lib/sync/background_sync.dart').readAsStringSync();
 
   test('both ingest callbacks refuse while a reset is in flight', () {
     // The singles path.
@@ -61,9 +63,9 @@ void main() {
 
   test('resetAllData raises the flag and always lowers it', () {
     final body = src.substring(src.indexOf('Future<void> resetAllData() async'));
-    final raise = body.indexOf('_resetting = true;');
+    final raise = body.indexOf('ResetGate.enter();');
     final wipe = body.indexOf('LocalDb.wipeAll()');
-    final lower = body.indexOf('_resetting = false;');
+    final lower = body.indexOf('ResetGate.leave();');
     final fin = body.indexOf('} finally {');
 
     expect(raise, greaterThanOrEqualTo(0), reason: 'the flag must be raised');
@@ -79,5 +81,71 @@ void main() {
     final scope = body.substring(0, end);
     expect(scope.contains('_lastRecTs = null;'), isTrue);
     expect(scope.contains('lastSynced = null;'), isTrue);
+  });
+
+  // ── the OTHER engine ──────────────────────────────────────────────────────
+  //
+  // `runHeadlessSync` builds its own BleEngine with callbacks wired straight to
+  // LocalDb and no AppState in scope, so nothing AppState guards reaches it.
+  // Same isolate (see reset_gate.dart), so one static covers both.
+
+  test('the headless drain refuses to start while a reset is running', () {
+    expect(bg.contains('if (ResetGate.active) {'), isTrue,
+        reason: 'runHeadlessSync must bail before it drains');
+    // Ahead of PairedDevice.load(), which is the only thing standing between a
+    // reset and a fresh drain today — and only by accident, via prefs.clear().
+    // The real CALL, not the mention of it in the comment above the guard.
+    expect(bg.indexOf('ResetGate.active'),
+        lessThan(bg.indexOf('final paired = await PairedDevice.load();')));
+  });
+
+  test('every headless write path is gated', () {
+    for (final cb in ['onRecord:', 'onEvent:', 'onRecordsBatch:',
+                      'onArchiveRecord:', 'onCommitBatch:']) {
+      final at = bg.indexOf(cb);
+      expect(at, greaterThanOrEqualTo(0), reason: '$cb not found');
+      // Slice to the NEXT callback at the same indent, so a guard belonging to
+      // a neighbour can never be mistaken for this one's.
+      final next = bg.indexOf('\n      on', at + cb.length);
+      final window = bg.substring(at, next < 0 ? bg.length : next);
+      expect(window.contains('ResetGate.active'), isTrue,
+          reason: '$cb writes without consulting ResetGate');
+    }
+  });
+
+  test('no write sink is handed over as a bare LocalDb tear-off', () {
+    // This shape — the database passed straight to the engine with nothing in
+    // between — is exactly how the guard was bypassed.
+    for (final bare in [
+      'onRecord: (sample, raw) => LocalDb.insertRecord',
+      'onRecordsBatch: LocalDb.insertRecordsBatch',
+      'onArchiveRecord: LocalDb.archiveRawRecord',
+    ]) {
+      expect(bg.contains(bare), isFalse, reason: 'bare tear-off: $bare');
+      expect(src.contains(bare), isFalse, reason: 'bare tear-off: $bare');
+    }
+  });
+
+  test('the ACK-bearing commit THROWS rather than silently succeeding', () {
+    // Only `onCommit` can bank raws + archives + trim cursor in one
+    // transaction, and DrainController reads durability from a throw. A quiet
+    // return would ACK and let the band trim flash that was never stored —
+    // a race turned into real data loss.
+    for (final f in [src, bg]) {
+      final at = f.indexOf('onCommitBatch:');
+      final window = f.substring(at, at + 900);
+      expect(window.contains('ResetGate.active'), isTrue);
+      expect(window.contains('throw StateError'), isTrue,
+          reason: 'the commit gate must throw, not return');
+    }
+  });
+
+  test('the gate is a plain latch — enter, leave, and it stays put', () {
+    addTearDown(ResetGate.resetForTest);
+    expect(ResetGate.active, isFalse);
+    ResetGate.enter();
+    expect(ResetGate.active, isTrue);
+    ResetGate.leave();
+    expect(ResetGate.active, isFalse);
   });
 }

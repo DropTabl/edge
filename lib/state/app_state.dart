@@ -97,6 +97,7 @@ import '../sync/edge_tracking.dart';
 import '../sync/band_ownership.dart';
 import '../sync/high_freq_wake_window.dart';
 import '../sync/ios_bg_task.dart';
+import '../sync/reset_gate.dart';
 import '../sync/paired_device.dart';
 import '../sync/sync_policy.dart'
     show
@@ -226,18 +227,12 @@ class AppState extends ChangeNotifier {
 
   /// "Delete everything" is in progress — refuse every record ingest path.
   ///
-  /// [resetAllData] wipes the database but leaves the band CONNECTED: its own
-  /// documented order puts `signOut` (and the `unpair` inside it) last, because
-  /// that flips the route and unwinds the UI. So the strap keeps handing over
-  /// historical records across the wipe, and one landing after it is written
-  /// into the fresh database and re-advertised as the data edge — the deleted
-  /// installation, visible again, with nothing left to explain it.
-  ///
-  /// A refusal flag rather than a reordering: the ordering above is deliberate
-  /// and load-bearing, and tearing the link down first is a change to the
-  /// connection lifecycle, not to the wipe. Nothing is lost by refusing — the
-  /// band has not been ACKed for these records, so they are still on it.
-  bool _resetting = false;
+  /// Now [ResetGate], not a private field: the headless drain
+  /// (`runHeadlessSync`) builds its OWN BleEngine with callbacks wired straight
+  /// to LocalDb and no AppState in scope, so a flag living here could never be
+  /// consulted by it. Same isolate, so one static covers both — see
+  /// reset_gate.dart for why that holds and what would break it.
+  bool get _resetting => ResetGate.active;
   final List<String> logLines = [];
   bool busy = false;
 
@@ -1028,7 +1023,7 @@ class AppState extends ChangeNotifier {
   Future<void> resetAllData() async {
     // 0 · nothing further ENTERS the database either. The band is still
     //     connected and still draining — see [_resetting].
-    _resetting = true;
+    ResetGate.enter();
     try {
       // 1 · nothing further leaves this phone, starting now.
       telemetryConsent = false;
@@ -1087,7 +1082,7 @@ class AppState extends ChangeNotifier {
     } finally {
       // Never leave ingest refused if the reset threw part-way: a half-reset
       // install that silently drops every record is worse than the race.
-      _resetting = false;
+      ResetGate.leave();
     }
   }
 
@@ -1263,11 +1258,28 @@ class AppState extends ChangeNotifier {
       // durable commit, same arguments, one extra await frame, and the SAME
       // failure contract: `commitNativeBatch` rethrows so
       // `DrainController.commit` still reads durability from a throw.
-      onCommitBatch: (raws, samples, trimTokenHex, {archives, deviceFamily}) =>
-          _bandHost.commitNativeBatch(raws, samples, trimTokenHex,
-              archives: archives, deviceFamily: deviceFamily),
+      onCommitBatch: (raws, samples, trimTokenHex,
+          {archives, deviceFamily}) async {
+        // THROWS, never silently succeeds. This is the ACK gate: only
+        // `onCommit` can bank raws + archives + trim cursor in one
+        // transaction, and DrainController reads durability FROM A THROW
+        // (see its safe-trim invariant). Returning quietly here would tell
+        // the drain the chunk was banked, it would ACK, and the band would
+        // trim flash that this reset refused to store — turning a race into
+        // real data loss on a band the user may not be deleting after all if
+        // the reset then fails. A throw blocks the ACK and the records stay
+        // on the strap.
+        if (ResetGate.active) {
+          throw StateError('data reset in progress — refusing to commit');
+        }
+        return _bandHost.commitNativeBatch(raws, samples, trimTokenHex,
+            archives: archives, deviceFamily: deviceFamily);
+      },
       // Pre-setup fallback only: the drain path archives inside commitSyncBatch.
-      onArchiveRecord: LocalDb.archiveRawRecord,
+      onArchiveRecord: (raw) async {
+        if (_resetting) return; // see [_resetting]
+        await LocalDb.archiveRawRecord(raw);
+      },
       cursorReader: (base) =>
           LocalDb.getCursorInt(LocalDb.cursorKeyFor(base, LocalDb.kPrimaryDeviceId)),
       // Debounced compute trigger: with continuous listening there's no discrete
