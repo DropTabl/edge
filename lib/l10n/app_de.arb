@@ -2365,7 +2365,7 @@
   "ecgReasonNotEnoughData": "Zu wenige Daten",
   "ecgAnalyzeNow": "Jetzt analysieren",
   "ecgAnalyzeCloudTitle": "Diese Aufzeichnung an dein Modell senden?",
-  "ecgAnalyzeCloudBody": "Die Zusammenfassung und eine begrenzte Kurvenhülle werden an {host} als {model} gesendet. Keine Rohdaten, keine Seriennummer.",
+  "ecgAnalyzeCloudBody": "Die Zusammenfassung und die vollständige Kurve (jeder vom Band aufgezeichnete Messwert, 100 pro Sekunde) werden an {host} als {model} gesendet. Keine Rohdaten, keine Seriennummer.",
   "ecgContinue": "Weiter",
   "ecgCancel": "Abbrechen",
   "ecgDelete": "Aufzeichnung löschen",

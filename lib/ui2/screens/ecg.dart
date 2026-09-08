@@ -805,8 +805,9 @@ class _EcgDetailScreenState extends State<EcgDetailScreen> {
           ),
           content: Text(
             l?.ecgAnalyzeCloudBody(host, cfg.model) ??
-                'The reading summary and a bounded waveform envelope will be sent '
-                    'to $host as ${cfg.model}. No raw frames, no band serial.',
+                'The reading summary and the full waveform (every sample the '
+                    'band recorded, 100 per second) will be sent to $host as '
+                    '${cfg.model}. No raw frames, no band serial.',
           ),
           actions: [
             TextButton(

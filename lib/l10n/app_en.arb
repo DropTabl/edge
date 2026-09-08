@@ -12253,7 +12253,7 @@
   "@ecgAnalyzeCloudTitle": {
     "description": "WHOOP MG ECG: Send this reading to your model?"
   },
-  "ecgAnalyzeCloudBody": "The reading summary and a bounded waveform envelope will be sent to {host} as {model}. No raw frames, no band serial.",
+  "ecgAnalyzeCloudBody": "The reading summary and the full waveform (every sample the band recorded, 100 per second) will be sent to {host} as {model}. No raw frames, no band serial.",
   "@ecgAnalyzeCloudBody": {
     "description": "WHOOP MG ECG: The reading summary and a bounded waveform envelope will be sent to {host} as {model}. No raw frames, no band serial.",
     "placeholders": {

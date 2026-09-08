@@ -2365,7 +2365,7 @@
   "ecgReasonNotEnoughData": "数据不足",
   "ecgAnalyzeNow": "立即分析",
   "ecgAnalyzeCloudTitle": "将此读数发送到您的模型？",
-  "ecgAnalyzeCloudBody": "读数摘要和有限的波形包络将作为 {model} 发送到 {host}。不含原始帧和手环序列号。",
+  "ecgAnalyzeCloudBody": "读数摘要和完整波形（手环记录的每个采样点，每秒 100 个）将作为 {model} 发送到 {host}。不含原始帧和手环序列号。",
   "ecgContinue": "继续",
   "ecgCancel": "取消",
   "ecgDelete": "删除读数",

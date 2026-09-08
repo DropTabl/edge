@@ -2394,7 +2394,7 @@
   "ecgReasonNotEnoughData": "Datos insuficientes",
   "ecgAnalyzeNow": "Analizar ahora",
   "ecgAnalyzeCloudTitle": "¿Enviar esta lectura a tu modelo?",
-  "ecgAnalyzeCloudBody": "El resumen y una envolvente acotada de la onda se enviarán a {host} como {model}. Sin tramas en bruto ni número de serie.",
+  "ecgAnalyzeCloudBody": "El resumen y la onda completa (todas las muestras que registró la banda, 100 por segundo) se enviarán a {host} como {model}. Sin tramas en bruto ni número de serie.",
   "ecgContinue": "Continuar",
   "ecgCancel": "Cancelar",
   "ecgDelete": "Eliminar lectura",

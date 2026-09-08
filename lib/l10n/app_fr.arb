@@ -2365,7 +2365,7 @@
   "ecgReasonNotEnoughData": "Données insuffisantes",
   "ecgAnalyzeNow": "Analyser maintenant",
   "ecgAnalyzeCloudTitle": "Envoyer cette lecture à votre modèle ?",
-  "ecgAnalyzeCloudBody": "Le résumé et une enveloppe bornée du tracé seront envoyés à {host} en tant que {model}. Aucune trame brute, aucun numéro de série.",
+  "ecgAnalyzeCloudBody": "Le résumé et le tracé complet (chaque échantillon enregistré par le bracelet, 100 par seconde) seront envoyés à {host} en tant que {model}. Aucune trame brute, aucun numéro de série.",
   "ecgContinue": "Continuer",
   "ecgCancel": "Annuler",
   "ecgDelete": "Supprimer la lecture",
