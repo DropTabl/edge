@@ -1630,7 +1630,17 @@ import 'substrate.dart';
 // inversion depth (672 ms measured) — so the bump is real. Interval VALUES and
 // their order are untouched by the repair; only the modelled clock moves.
 // kAnalyticsPin/kProtocolPin are UNCHANGED: the repair is entirely edge-side.
-const int kAlgoVersion = 88;
+//
+// 88 → 89 (movement-floor DST fix): `daysSinceFrozen` (movement_floor_policy.dart)
+// used to run `.difference().inDays` on the parsed LOCAL `DateTime`s directly.
+// A span crossing a spring-forward transition loses that day's missing hour,
+// so a real 10-day gap floored to 9 — the same trap `dayLabelBefore` above is
+// built to avoid, just missed here. Now both dates are normalized to UTC
+// midnight before diffing. Changes the movement-floor staleness/re-freeze
+// decision (and therefore `active_min`) for any day whose gap from the
+// frozen-on date spans a DST transition. Real output change, so the bump is
+// real. kAnalyticsPin/kProtocolPin are UNCHANGED: edge-only fix.
+const int kAlgoVersion = 89;
 /// The sibling SHAs this version was derived against, asserted against
 /// pubspec.yaml in test/db_serve_version_and_reads_test.dart.
 ///
