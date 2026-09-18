@@ -1420,8 +1420,32 @@ class AppState extends ChangeNotifier {
   /// since `openAppWhenRun = true` may just foreground an already-running
   /// process rather than trigger a fresh launch.
   Future<void> checkPendingSiriRoute() async {
+    await _maybeEnableTomorrowAlarmFromSiri();
     final route = await WidgetService.consumePendingRoute();
     if (route != null) _handleTapRoute(route);
+  }
+
+  /// EnableTomorrowAlarmIntent (Siri/Shortcuts) latches the weekday it wants
+  /// turned on — computed on the Swift side, at the moment Siri actually ran
+  /// it, not here (a request made just before local midnight must still mean
+  /// the day the user asked for, even if the app doesn't resume until after
+  /// midnight). The widget process has no BLE, so it cannot arm the band
+  /// itself; this is the actual write: flip that weekday's slot on at
+  /// whatever hour/minute it already has (same as tapping that slot's
+  /// toggle on the Alarm screen — never invents a time), then
+  /// [setScheduleDay] re-arms the band immediately when connected. On
+  /// failure, re-latch the request rather than drop it — a transient
+  /// DB/BLE error shouldn't silently eat a Siri command; it just retries on
+  /// the next launch/resume.
+  Future<void> _maybeEnableTomorrowAlarmFromSiri() async {
+    final weekday = await WidgetService.consumeEnableTomorrowAlarmWeekday();
+    if (weekday == null) return;
+    try {
+      await setScheduleDay(weekday: weekday, enabled: true);
+    } catch (e) {
+      _log('[alarm] siri enable-tomorrow failed, will retry next resume: $e');
+      await WidgetService.relatchEnableTomorrowAlarm(weekday);
+    }
   }
 
   /// Central disposal guard.
