@@ -37,6 +37,7 @@ import '../../data/journal_fields.dart' show formatMinuteOfDay;
 import '../../data/local_repository.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/metric.dart';
+import '../../notify/notification_prefs.dart' show NotificationPrefs;
 import '../../state/app_state.dart';
 import '../../state/units_controller.dart';
 import '../../theme/theme_switcher.dart' show themedRoute;
@@ -189,6 +190,53 @@ String syncedThroughLabel(DateTime? at, String? todayId,
           '${at.minute.toString().padLeft(2, '0')}'
       : formatDayTime(at, l);
   return l?.homeSyncedThrough(when) ?? 'Synced through $when';
+}
+
+/// The band's battery, straight off the same [DeviceState] devices.dart
+/// already reads (`app.device.batteryPct`/`.charging`) — never a second poll.
+/// Null when unpaired or the strap hasn't reported a level yet, which this
+/// deliberately renders as nothing rather than a placeholder.
+(double, bool)? deviceBatteryOf(BuildContext c) {
+  try {
+    return c.select<AppState, (double, bool)?>((a) {
+      final pct = a.device.batteryPct;
+      final charging = a.device.charging;
+      // Both or neither — a known level with an unknown charging state must
+      // not fall back to `false`, which would draw a plain (or worse, red)
+      // icon over a charging state we simply haven't heard yet.
+      return (pct == null || charging == null) ? null : (pct, charging);
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Draining, not charging, at or under the same default the low-battery
+/// notification uses ([NotificationPrefs.batteryPctDefault]) — this reads the
+/// shared constant rather than the user's live pref, since a color hint on
+/// Home is not worth an async prefs read on every build.
+bool lowBattery(double pct, bool charging) =>
+    // Strict `<`, matching device_alerts.dart's own `fireLow` comparison —
+    // the color hint should agree with the alert at the boundary, not just
+    // near it.
+    !charging && pct < NotificationPrefs.batteryPctDefault;
+
+/// "78%" with a battery glyph, next to the sync line — the one place that
+/// already used a battery icon as an unrelated recovery-ring metaphor, but
+/// this is the actual reading. Mirrors devices.dart's `SourceRow` battery
+/// chip (same icon swap, same 13px size) rather than inventing a new look.
+Widget? batteryLine(BuildContext c) {
+  final battery = deviceBatteryOf(c);
+  if (battery == null) return null;
+  final (pct, charging) = battery;
+  final p = P.of(c);
+  final color = lowBattery(pct, charging) ? p.on(C.red) : p.ink3;
+  return Row(mainAxisSize: MainAxisSize.min, children: [
+    Icon(charging ? LucideIcons.batteryCharging : LucideIcons.battery,
+        size: 13, color: color),
+    const SizedBox(width: 3),
+    Text('${pct.round()}%', style: F.cap.copyWith(color: color)),
+  ]);
 }
 
 /// The status line as Home renders it, so the loading / failed / bare paths
@@ -1468,6 +1516,12 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
         // exactly when "how far are we?" is worth answering, and the header
         // this line normally sits under does not exist on this path.
         Align(alignment: Alignment.centerLeft, child: syncedThroughLine(c, null, l)),
+        // The battery reading lives on AppState.device, independent of
+        // HomeData — a load failure or first run must not hide it too.
+        if (batteryLine(c) case final battery?) ...[
+          const SizedBox(height: 2),
+          Align(alignment: Alignment.centerLeft, child: battery),
+        ],
         const SizedBox(height: S.x3),
         if (_loading)
           const Center(child: CircularProgressIndicator())
@@ -1560,6 +1614,14 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
               // looking at today, or at last night?" used to be answerable
               // only by opening Profile > Devices.
               syncedThroughLine(c, d.dayId, l),
+              // Its own line, not squeezed into the sync line's row: at
+              // accessibility text sizes that row has no slack left, and
+              // `Expanded` would only shrink the sync text into extra wrapped
+              // lines to make room rather than ever actually overflow.
+              if (batteryLine(c) case final battery?) ...[
+                const SizedBox(height: 2),
+                battery,
+              ],
             ]),
           ),
           const SizedBox(width: S.x3),
