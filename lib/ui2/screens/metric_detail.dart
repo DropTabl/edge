@@ -737,6 +737,12 @@ class _MetricDetailState extends State<MetricDetail> {
     ]);
   }
 
+  /// The AppState this screen told "a live-HR view is on screen", captured
+  /// here so `dispose` can release it without touching `context`. Only the
+  /// LIVE resting-HR screen (data == null) reads AppState at all — fixtures
+  /// and goldens render with no Provider above them.
+  AppState? _liveHrOwner;
+
   @override
   void initState() {
     super.initState();
@@ -745,7 +751,16 @@ class _MetricDetailState extends State<MetricDetail> {
       _loading = false;
       return;
     }
+    if (widget.metricKey == 'resting_hr') {
+      _liveHrOwner = context.read<AppState>()..retainLiveHrView();
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  @override
+  void dispose() {
+    _liveHrOwner?.releaseLiveHrView();
+    super.dispose();
   }
 
   Future<void> _load() async {
