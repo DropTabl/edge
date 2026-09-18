@@ -5896,6 +5896,7 @@ class AppState extends ChangeNotifier {
         deviceFamily: engine.linkDeviceFamily,
         observedCeilingBpm: _observedCeilingBpm,
         restingHrHistory: _rhr28,
+        manualZoneLowerBpm: manualZoneBoundsFromProfile(user),
       ),
       restingHr: _liveRestingHr,
     );
@@ -6122,6 +6123,7 @@ class AppState extends ChangeNotifier {
               deviceFamily: engine.linkDeviceFamily,
               observedCeilingBpm: _observedCeilingBpm,
               restingHrHistory: _rhr28,
+              manualZoneLowerBpm: manualZoneBoundsFromProfile(user),
             ),
             restingHr: _liveRestingHr,
           );
