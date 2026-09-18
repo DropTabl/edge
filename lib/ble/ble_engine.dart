@@ -7596,7 +7596,11 @@ class BleEngine {
         }
       case LiveStreamStep.imuOff:
         if (r10 != null) {
-          if (hrHead) ops.add(send(Cmd.toggleRealtimeHr, const [0x01]));
+          if (hrHead) {
+            ops
+              ..add(send(Cmd.toggleRealtimeHr, const [0x01]))
+              ..add(() => gap(60));
+          }
           ops
             ..add(send(Cmd.toggleOpticalMode, const [revision1, 0x00]))
             ..add(() => gap(60))
