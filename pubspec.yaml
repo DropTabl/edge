@@ -424,7 +424,17 @@ dependencies:
       # `irregularBeatScreen` feeds the stored 24 h and sleep irregular-rhythm
       # screens (onehz_pipeline.dart) — both are real, if narrow, output
       # changes, not NaN/±inf-only rejections.
-      ref: 1fa8144a5e3b728ce91eeed6ecbc15d482933b44
+      #
+      # analytics main @ #61 merge (2a0bea1) + this branch's own #62
+      # (41ac641): adds `vo2maxSubmaxEstimate`, additive-only, nothing
+      # existing reads it yet on the analytics side. 41ac641 is #62's second
+      # commit — CodeRabbit caught `inputs_used` under-claiming grade when
+      # `gradePercent` was supplied; fixed there, not on f334a06.
+      #
+      # Verified against the SHA:
+      #   `git show 41ac641:lib/src/onehz/clinical/vo2max.dart |
+      #      grep -E 'vo2maxSubmaxEstimate|workout_grade'`
+      ref: 41ac641a94852abec29c287e3d9668f33f7f56c9
 
   # BLE — flutter_blue_plus is the maintained cross-platform GATT client.
   flutter_blue_plus: ^1.36.8
