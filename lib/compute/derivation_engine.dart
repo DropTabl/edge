@@ -1700,7 +1700,19 @@ import 'substrate.dart';
 // both channels. kAnalyticsPin repinned to analytics PR #75's merged main
 // SHA. This changes the stored drivers list for real users, so it gets a
 // version bump despite being narrative-only, not a headline-score change.
-const int kAlgoVersion = 95;
+// 95 → 96 (`_resolveOwnership`/substrate splice, accel1Hz/ppgRedIr/
+// skinTempRaw priority): `signal_priority` and the device-priority screen are
+// generic over every InputSignal a paired device declares, but the substrate
+// loader admitted a whole `decoded_onehz` row (accel + ppg + skin-temp
+// bundled with hr in one row) purely on the hr1Hz ownership winner for that
+// second — a user's explicit accel1Hz/ppgRedIr/skinTempRaw priority order had
+// no effect at all. `_resolveOwnership` now resolves those three signals too,
+// and a contended second splices each field group in from its OWN owner's row
+// when that device has one, instead of following hr1Hz. No output change for
+// any single-device install or any pairing where those three signals are not
+// actually contended (`group.length < 2` short-circuits to the unchanged row).
+// kAnalyticsPin/kProtocolPin UNCHANGED: edge-only fix.
+const int kAlgoVersion = 96;
 /// The sibling SHAs this version was derived against, asserted against
 /// pubspec.yaml in test/db_serve_version_and_reads_test.dart.
 ///
@@ -1955,6 +1967,135 @@ const int _headlineFreezeMarginSec = 60 * 60;
     return (day: today, value: liveReadiness); // first complete settle → pin
   }
   return null; // nothing to pin yet for today
+}
+
+/// Composes one substrate-loader page's `decoded_onehz` rows into the frames
+/// the derive worker actually decodes — SIGNAL-LEVEL ownership, not row-level.
+///
+/// `decoded_onehz`'s key is `(device_id, ts_ms)`, so a contended second can
+/// have one row per paired device, each carrying hr AND accel AND ppg AND
+/// skin-temp together. A row is admitted by its hr1Hz ownership (hr/rr live
+/// nowhere else), but accel1Hz/ppgRedIr/skinTempRaw ride along in that same
+/// row — and a user can rank a DIFFERENT device for those via
+/// `signal_priority` (the device-priority screen, `LocalDb.setSignalPriority`)
+/// without that ranking ever taking effect, because the whole row followed
+/// whichever device won hr1Hz. This splices each field group in from
+/// whichever row that signal's OWN ownership actually names, when that
+/// device has a row at this second — never fabricated, just re-attributed.
+///
+/// A single-device day, or a signal never actually contended for a given
+/// second, never enters the splice path (`group.length < 2` / same owner
+/// short-circuits to the row unchanged) — byte-identical to before this
+/// existed. `@visibleForTesting` so the splice logic is checkable directly,
+/// without staging a whole night through the derive/DB machinery.
+@visibleForTesting
+List<Map<String, dynamic>> composeOneHzFrames(
+  List<Map<String, dynamic>> decodedRows,
+  Map<InputSignal, List<OwnedSpan>> ownership,
+) {
+  final oneHzSpans = ownership[InputSignal.hr1Hz] ?? const <OwnedSpan>[];
+  final accelSpans = ownership[InputSignal.accel1Hz] ?? const <OwnedSpan>[];
+  final ppgSpans = ownership[InputSignal.ppgRedIr] ?? const <OwnedSpan>[];
+  final skinTempSpans = ownership[InputSignal.skinTempRaw] ?? const <OwnedSpan>[];
+  if (accelSpans.isEmpty && ppgSpans.isEmpty && skinTempSpans.isEmpty) {
+    // No secondary ownership resolved for any spliced signal (the single-
+    // device/import case oneHzSpans itself already covers) — skip the
+    // grouping allocation entirely and fall back to the plain row filter.
+    if (oneHzSpans.isEmpty) return decodedRows;
+    return [
+      for (final r in decodedRows)
+        if (_ownedBy(oneHzSpans, r)) r,
+    ];
+  }
+
+  final byRecTs = <int, List<Map<String, dynamic>>>{};
+  for (final r in decodedRows) {
+    final ts = (r['rec_ts'] as num?)?.toInt();
+    if (ts != null) byRecTs.putIfAbsent(ts, () => []).add(r);
+  }
+
+  Map<String, dynamic> splice(
+    Map<String, dynamic> base,
+    List<OwnedSpan> spans,
+    List<String> cols,
+  ) {
+    final group = byRecTs[(base['rec_ts'] as num).toInt()]!;
+    if (spans.isEmpty || group.length < 2) return base;
+    final baseDeviceId = base['device_id'] as String? ?? LocalDb.kPrimaryDeviceId;
+    final owner = spanAt(spans, (base['rec_ts'] as num).toInt())?.deviceId;
+    if (owner == null || owner == baseDeviceId) return base;
+    Map<String, dynamic>? ownerRow;
+    for (final r in group) {
+      if ((r['device_id'] as String? ?? LocalDb.kPrimaryDeviceId) == owner) {
+        ownerRow = r;
+        break;
+      }
+    }
+    if (ownerRow == null) return base;
+    // COPY THE WHOLE GROUP, including a null column — `device_coverage`
+    // declares `ppgRedIr` when EITHER raw PPG channel is present (db.dart),
+    // so the owner's row can carry one channel and not the other, and both
+    // skin-temp columns are independently nullable. Copying only the
+    // non-null columns left the base (wrong device's) value sitting in the
+    // other column, combining fields from two devices in one frame.
+    //
+    // ponytail: `device_family`/`device_id` are deliberately NOT re-stamped
+    // here — the returned frame still carries the hr1Hz owner's. `_families`
+    // (derive_prepare.dart)'s day-wide family singleton, which
+    // `calibrationFor`/`estimatedMaxHr` read for ENMO-cut and HR-max
+    // constants, is therefore keyed off whichever device won hr1Hz, not off
+    // whoever actually supplied a spliced accel1Hz reading. A gen4+gen5
+    // pairing where the user ranks a DIFFERENT device for accel1Hz than for
+    // hr1Hz can apply the hr-owner's family calibration to the other
+    // family's accel — narrower than the row-level bug this fix closes (it
+    // needs both a cross-family pairing AND divergent per-signal priority),
+    // but real. Upgrade path: thread a per-signal device/family map through
+    // `Substrate` (a new field per anchor signal, not the single
+    // `deviceFamily`) to the ENMO/HR-max call sites — real scope, deferred
+    // rather than rushed into this fix.
+    return {...base, for (final c in cols) c: ownerRow[c]};
+  }
+
+  return [
+    for (final r in decodedRows)
+      if (_ownedBy(oneHzSpans, r))
+        splice(
+          splice(
+            splice(r, accelSpans, const ['ax', 'ay', 'az']),
+            ppgSpans,
+            const ['spo2_red_raw', 'spo2_ir_raw'],
+          ),
+          skinTempSpans,
+          const ['skin_temp_raw', 'skin_temp_c'],
+        ),
+  ];
+}
+
+bool _ownedBy(List<OwnedSpan> spans, Map<String, dynamic> r) {
+  if (spans.isEmpty) return true;
+  final owner = spanAt(spans, (r['rec_ts'] as num).toInt())?.deviceId;
+  if (owner == null) return true;
+  return owner == (r['device_id'] as String? ?? LocalDb.kPrimaryDeviceId);
+}
+
+/// The index where [rows]' trailing `rec_ts` group starts — 0 when every row
+/// shares one second, `rows.length - 1` when the last row's second is alone.
+///
+/// `rows` must already be rec_ts-ascending (`decodedOneHzBatchByRecTsRange`'s
+/// own order, and the substrate loader's `carry ++ page` concatenation
+/// preserves it — carry only ever holds rows from an EARLIER page). Used to
+/// hold a contended second's trailing rows back to the next page rather than
+/// splicing `composeOneHzFrames` against a group `decodedOneHzBatchByRecTsRange`'s
+/// LIMIT happened to cut in half. `@visibleForTesting` so the boundary walk
+/// is checkable without staging a 2000-row page through the DB.
+@visibleForTesting
+int trailingRecTsGroupStart(List<Map<String, dynamic>> rows) {
+  final boundaryTs = (rows.last['rec_ts'] as num).toInt();
+  var i = rows.length - 1;
+  while (i > 0 && (rows[i - 1]['rec_ts'] as num).toInt() == boundaryTs) {
+    i--;
+  }
+  return i;
 }
 
 /// Test seam: the rolling baseline window the readiness computation actually
@@ -2834,7 +2975,17 @@ class DerivationEngine {
     // `signal_priority` after the day computed (which could stamp an order
     // the user changed mid-derive, and cost a query per signal per day).
     final priority = <InputSignal, List<String>>{};
-    for (final sig in const [InputSignal.hr1Hz, InputSignal.rrIntervals]) {
+    for (final sig in const [
+      InputSignal.hr1Hz,
+      InputSignal.rrIntervals,
+      // These three ride bundled inside the same `decoded_onehz` row as hr —
+      // resolved here so a contended second can be spliced field-by-field
+      // (see `composeOneHzFrames`) instead of the whole row silently
+      // following whichever device won hr1Hz.
+      InputSignal.accel1Hz,
+      InputSignal.ppgRedIr,
+      InputSignal.skinTempRaw,
+    ]) {
       // BINDING: `signal_priority` ships EMPTY by design (M3 deliberately did
       // not seed a physics ladder). "No priority row" means "the primary
       // device owns this window", never "skip masking" and never "let every
@@ -3305,22 +3456,7 @@ class DerivationEngine {
     // M5: the resolved spans for this call's window, one list per anchor
     // signal. Read once, outside the loop — `ownership` never changes while
     // this range loads.
-    final oneHzSpans = ownership[InputSignal.hr1Hz] ?? const <OwnedSpan>[];
     final rrOwnedSpans = ownership[InputSignal.rrIntervals] ?? const <OwnedSpan>[];
-    // OWNER IDENTITY, NOT SPAN COUNT.
-    //
-    // The filter used to run only when a list held more than one span, on the
-    // reasoning that one span means one owner means nothing to arbitrate.
-    // `resolveOwnership` treats `priority` as the CANDIDATE list, and
-    // `signal_priority` ships empty, so a second device with real coverage is
-    // not a candidate: the resolver reports ONE span owned by the primary and
-    // that gate then waved the second device's rows straight into the
-    // substrate — the exact opposite of the binding `_prepareTargetDay`
-    // documents.
-    //
-    // A null owner is "no coverage claim for this second", never "excluded",
-    // so it is admitted. With no spans at all (the import path) every row is
-    // admitted, which keeps a day that resolved nothing byte-identical.
     bool owned(List<OwnedSpan> spans, Map<String, dynamic> r) {
       if (spans.isEmpty) return true;
       final owner = spanAt(spans, (r['rec_ts'] as num).toInt())?.deviceId;
@@ -3344,6 +3480,17 @@ class DerivationEngine {
       // beats from wherever the previous page stopped, and the tail is swept
       // after the loop — so the day's beat window is covered exactly once.
       var rrFrom = fromRecTs;
+      // A contended second's OTHER row can land on the far side of a page
+      // boundary — `decodedOneHzBatchByRecTsRange`'s LIMIT is applied after
+      // ordering by rec_ts, not aligned to rec_ts groups. Composing a page
+      // whose trailing rec_ts group is only half-present would keep the
+      // hr1Hz-owner's own accel/ppg/skin-temp value for that ONE boundary
+      // second instead of splicing in the other device's, so the group's
+      // rows that arrived this round are held here until the rest of the
+      // group is seen (or the range ends). Rare in practice — it takes a
+      // page-sized batch of rows to land exactly mid-group — but the fix is
+      // cheap and the alternative is a silent one-second attribution miss.
+      var carry = const <Map<String, dynamic>>[];
       while (true) {
         final decodedRows = await LocalDb.decodedOneHzBatchByRecTsRange(
           limit: _rawDecodeBatchSize,
@@ -3367,43 +3514,64 @@ class DerivationEngine {
             rangePages: rangePages,
             rangeRows: rangeRows,
           );
-          // The page is ordered rec_ts ASC, so last = max second. decoded_rr
-          // shares the rec_ts key, so [rrFrom, lastRecTs] is a PK range read —
-          // no counter span (which broke across the strap's reboot reset).
-          //
           // THE CURSOR ADVANCES OFF THE UNFILTERED PAGE, ALWAYS. `afterRecTs`/
-          // `afterCursor`, the `decodedRows.length < _rawDecodeBatchSize`
-          // break, and `rrFrom` below are all driven by `decodedRows`/
-          // `lastRecTs` — never by the filtered `frames`/`rrRows` sent to the
-          // worker. Filtering first would stall the keyset cursor on a page
-          // whose surviving rows are fewer than the batch size and silently
-          // truncate the day; a fully-filtered page still advances the
-          // cursor and still `send`s (an empty list is harmless — the
-          // worker's page handler iterates it).
-          final lastRecTs = (decodedRows.last['rec_ts'] as num?)?.toInt();
-          final rawRrRows = lastRecTs == null
+          // `afterCursor` and the `decodedRows.length < _rawDecodeBatchSize`
+          // break are driven by `decodedRows` alone — never by `carry` or the
+          // filtered `frames`/`rrRows` sent to the worker. Filtering first
+          // would stall the keyset cursor on a page whose surviving rows are
+          // fewer than the batch size and silently truncate the day.
+          final isFinalPage = decodedRows.length < _rawDecodeBatchSize;
+          final combined =
+              carry.isEmpty ? decodedRows : [...carry, ...decodedRows];
+          final splitIdx = trailingRecTsGroupStart(combined);
+          // splitIdx == 0 means the WHOLE page-sized batch shares one
+          // rec_ts — a pathological amount of contention no real pairing
+          // produces. Send it as-is rather than risk carrying forever.
+          final toSend =
+              (isFinalPage || splitIdx == 0) ? combined : combined.sublist(0, splitIdx);
+          carry = (isFinalPage || splitIdx == 0)
               ? const <Map<String, dynamic>>[]
-              : await LocalDb.decodedRrByRecTsRange(
-                  fromRecTs: rrFrom,
-                  toRecTs: lastRecTs,
-                );
-          if (lastRecTs != null) rrFrom = lastRecTs + 1;
-          final frames = [
-            for (final r in decodedRows)
-              if (owned(oneHzSpans, r)) r,
-          ];
-          final rrRows = [
-            for (final r in rawRrRows)
-              if (owned(rrOwnedSpans, r)) r,
-          ];
-          worker.send({'type': 'page', 'frames': frames, 'rr': rrRows});
+              : combined.sublist(splitIdx);
+          if (toSend.isNotEmpty) {
+            // decoded_rr shares the rec_ts key with decoded_onehz, so
+            // [rrFrom, lastSentRecTs] is a PK range read — no counter span
+            // (which broke across the strap's reboot reset).
+            final lastSentRecTs = (toSend.last['rec_ts'] as num).toInt();
+            final rawRrRows = await LocalDb.decodedRrByRecTsRange(
+              fromRecTs: rrFrom,
+              toRecTs: lastSentRecTs,
+            );
+            rrFrom = lastSentRecTs + 1;
+            final frames = composeOneHzFrames(toSend, ownership);
+            final rrRows = [
+              for (final r in rawRrRows)
+                if (owned(rrOwnedSpans, r)) r,
+            ];
+            worker.send({'type': 'page', 'frames': frames, 'rr': rrRows});
+          }
           final last = decodedRows.last;
           afterRecTs = (last['rec_ts'] as num?)?.toInt() ?? afterRecTs;
           afterCursor = (last['counter'] as num?)?.toInt() ?? afterCursor;
-          if (decodedRows.length < _rawDecodeBatchSize) break;
+          if (isFinalPage) break;
           continue;
         }
         break;
+      }
+      // A page landed EXACTLY on `_rawDecodeBatchSize` as the true last page
+      // (the next fetch came back empty) — its trailing group is still held.
+      if (carry.isNotEmpty) {
+        final lastRecTs = (carry.last['rec_ts'] as num).toInt();
+        final rawRrRows = await LocalDb.decodedRrByRecTsRange(
+          fromRecTs: rrFrom,
+          toRecTs: lastRecTs,
+        );
+        rrFrom = lastRecTs + 1;
+        final frames = composeOneHzFrames(carry, ownership);
+        final rrRows = [
+          for (final r in rawRrRows)
+            if (owned(rrOwnedSpans, r)) r,
+        ];
+        worker.send({'type': 'page', 'frames': frames, 'rr': rrRows});
       }
       // The tail: beats after the last frame second (or, on a range with no
       // frames at all, the whole range). Usually zero rows and one indexed

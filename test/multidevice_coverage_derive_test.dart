@@ -374,4 +374,140 @@ void main() {
     LocalDb.dbName = 'multidevice_coverage_derive_test.db';
     await LocalDb.instance;
   });
+
+  group('composeOneHzFrames — field-level splice for accel1Hz/ppgRedIr/'
+      'skinTempRaw (edge#441-class bug: those three rode on hr1Hz ownership '
+      'and a user\'s priority for them had no effect)', () {
+    Map<String, dynamic> row(String deviceId, int recTs, {
+      int? hr,
+      double? ax,
+      int? skinTempRaw,
+    }) =>
+        {
+          'rec_ts': recTs,
+          'device_id': deviceId,
+          'hr': ?hr,
+          if (ax != null) ...{'ax': ax, 'ay': 0.0, 'az': 1.0},
+          'skin_temp_raw': ?skinTempRaw,
+        };
+
+    test('skinTempRaw priority is honored independently of the hr1Hz owner',
+        () {
+      // Ring owns hr1Hz for this second; primary owns skinTempRaw — the
+      // opposite order, exactly the multi-device pairing the bug describes.
+      final rows = [
+        row(_primary, 100, hr: 58, skinTempRaw: 500),
+        row(_ring, 100, hr: 100, skinTempRaw: 900),
+      ];
+      final ownership = <InputSignal, List<OwnedSpan>>{
+        InputSignal.hr1Hz: [(start: 0, end: 200, deviceId: _ring)],
+        InputSignal.skinTempRaw: [(start: 0, end: 200, deviceId: _primary)],
+      };
+      final frames = composeOneHzFrames(rows, ownership);
+      // Exactly one frame survives for the second — the hr1Hz owner's row —
+      // with skin_temp_raw re-attributed from the skinTempRaw owner.
+      expect(frames.length, 1);
+      expect(frames.single['device_id'], _ring);
+      expect(frames.single['hr'], 100, reason: 'hr always follows hr1Hz');
+      expect(frames.single['skin_temp_raw'], 500,
+          reason: 'skinTempRaw priority names the primary — before the fix '
+              'this read 900 (the hr1Hz owner\'s own value), because the '
+              'whole row was gated on hr1Hz alone');
+    });
+
+    test('accel1Hz splices independently of hr1Hz and skinTempRaw', () {
+      final rows = [
+        row(_primary, 100, hr: 58, ax: 0.1, skinTempRaw: 500),
+        row(_ring, 100, hr: 100, ax: 0.9, skinTempRaw: 900),
+      ];
+      final ownership = <InputSignal, List<OwnedSpan>>{
+        InputSignal.hr1Hz: [(start: 0, end: 200, deviceId: _ring)],
+        InputSignal.accel1Hz: [(start: 0, end: 200, deviceId: _primary)],
+        InputSignal.skinTempRaw: [(start: 0, end: 200, deviceId: _ring)],
+      };
+      final frames = composeOneHzFrames(rows, ownership);
+      expect(frames.single['ax'], 0.1, reason: 'accel1Hz names the primary');
+      expect(frames.single['skin_temp_raw'], 900,
+          reason: 'skinTempRaw names the ring, same as the hr1Hz owner here '
+              '— no splice needed, base value passes through');
+    });
+
+    test('a null column in the owner\'s field group is copied too, not left '
+        'as the base row\'s stale value (CodeRabbit #444)', () {
+      // Ring owns ppgRedIr and has ONLY the red channel this second — its
+      // own IR reading is genuinely absent, not merely unset by the fixture.
+      final rows = [
+        {
+          'rec_ts': 100,
+          'device_id': _primary,
+          'hr': 58,
+          'spo2_red_raw': 111,
+          'spo2_ir_raw': 222,
+        },
+        {
+          'rec_ts': 100,
+          'device_id': _ring,
+          'hr': 100,
+          'spo2_red_raw': 333,
+          'spo2_ir_raw': null,
+        },
+      ];
+      final ownership = <InputSignal, List<OwnedSpan>>{
+        InputSignal.hr1Hz: [(start: 0, end: 200, deviceId: _primary)],
+        InputSignal.ppgRedIr: [(start: 0, end: 200, deviceId: _ring)],
+      };
+      final frames = composeOneHzFrames(rows, ownership);
+      expect(frames.single['spo2_red_raw'], 333, reason: 'ring\'s red channel');
+      expect(frames.single['spo2_ir_raw'], null,
+          reason: 'the ring owns ppgRedIr and genuinely has no IR reading '
+              'this second — before the fix this stayed at the primary\'s '
+              '222, silently mixing two devices\' PPG channels in one frame');
+    });
+
+    test('a single contributing device never enters the splice path '
+        '(byte-identical to a plain single-device day)', () {
+      final rows = [row(_primary, 100, hr: 58, skinTempRaw: 500)];
+      final ownership = <InputSignal, List<OwnedSpan>>{
+        InputSignal.hr1Hz: [(start: 0, end: 200, deviceId: null)],
+      };
+      expect(composeOneHzFrames(rows, ownership), rows);
+    });
+
+    test('no ownership resolved for any spliced signal falls back to the '
+        'plain hr1Hz row filter unchanged', () {
+      final rows = [
+        row(_primary, 100, hr: 58, skinTempRaw: 500),
+        row(_ring, 100, hr: 100, skinTempRaw: 900),
+      ];
+      final ownership = <InputSignal, List<OwnedSpan>>{
+        InputSignal.hr1Hz: [(start: 0, end: 200, deviceId: _ring)],
+      };
+      final frames = composeOneHzFrames(rows, ownership);
+      expect(frames.length, 1);
+      expect(frames.single['device_id'], _ring);
+      expect(frames.single['skin_temp_raw'], 900);
+    });
+  });
+
+  group('trailingRecTsGroupStart — a contended second must never be split '
+      'across a decoded_onehz page boundary', () {
+    Map<String, dynamic> r(int recTs) => {'rec_ts': recTs};
+
+    test('the last row is alone: nothing to hold back', () {
+      expect(trailingRecTsGroupStart([r(1), r(2), r(3)]), 2);
+    });
+
+    test('the trailing group spans several rows (one per contending device)',
+        () {
+      expect(trailingRecTsGroupStart([r(1), r(2), r(2), r(2)]), 1);
+    });
+
+    test('the whole batch shares one rec_ts — pathological, index 0', () {
+      expect(trailingRecTsGroupStart([r(9), r(9), r(9)]), 0);
+    });
+
+    test('a single row is trivially its own group', () {
+      expect(trailingRecTsGroupStart([r(5)]), 0);
+    });
+  });
 }
