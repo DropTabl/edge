@@ -1682,7 +1682,15 @@ import 'substrate.dart';
 // internal HRV-frequency-window gap. kAnalyticsPin bumped alongside this.
 // Verified: `git show 82857106e41c346b4edf9ad617829a5ddd1cc5c1:lib/src/onehz/clinical/hrv_freq.dart |
 //   grep -n 'segSec \* 0.8\|segSec \* 0.2'`
-const int kAlgoVersion = 93;
+//
+// 93 → 94 (`overreachingConjunction` rhr quantum guard, analytics PR #73):
+// an alternating whole-bpm rhr baseline (58/59) has a small nonzero MAD that
+// is unresolvable rounding noise, not real dispersion — the guard
+// `dispersionBelowQuantum` already applies on this same rhr channel in
+// illness_cusum/readiness_composite/event_detection. Without it, a 1bpm rise
+// could clear the gate and fire the "both facts point the same way" card on
+// nothing. kAnalyticsPin repinned to analytics PR #73's merged main SHA.
+const int kAlgoVersion = 94;
 /// The sibling SHAs this version was derived against, asserted against
 /// pubspec.yaml in test/db_serve_version_and_reads_test.dart.
 ///
@@ -1851,9 +1859,15 @@ const int kAlgoVersion = 93;
 // picking one single-device SHA over the other. Verified: `1cf8e61` (this
 // branch's own pin) IS an ancestor of `fe1464d` — the wearfit protocol
 // commit is already folded in, nothing is lost by moving to the tip.
-const String kAnalyticsPin = '82857106e41c346b4edf9ad617829a5ddd1cc5c1';
-// Repinned to analytics PR #72's merged main SHA (hrv_freq Welch gap guard,
-// kAlgoVersion 92->93 above).
+const String kAnalyticsPin = 'eed6dc92375ce1336fc4e31d13a0718f45e163cf';
+// Repinned to analytics main's tip, which carries BOTH PR #72 (hrv_freq
+// Welch gap guard) and PR #73 (overreachingConjunction rhr quantum guard) —
+// the two independent kAlgoVersion bumps above (93 and 94). Verified both
+// fixes are present at this SHA:
+//   `git show eed6dc9:lib/src/onehz/human/overreaching_conjunction.dart |
+//      grep -n dispersionBelowQuantum`
+//   `git show eed6dc9:lib/src/onehz/clinical/hrv_freq.dart |
+//      grep -n 'segSec \* 0.8\|segSec \* 0.2'`
 // Previously repinned to analytics PR #70's merged main SHA (was the pre-squash branch
 // commit 47847fa, orphaned once the PR squash-merged) — same content, see
 // pubspec.yaml's comment for the verification command.
