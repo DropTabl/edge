@@ -2345,7 +2345,11 @@ class _BaselineHistoryCache {
     final series = _series[key] ?? const <_DatedValue>[];
     final end = _beforeIndex(series, beforeDate);
     if (end == 0) return null;
-    return _prefixMax[key]![end - 1];
+    // Every key present in _series has a matching _prefixMax entry by
+    // construction (built together in the constructor from the same
+    // entries) — this is unreachable today, but `?[...]` costs nothing and
+    // survives a future refactor that builds one map without the other.
+    return _prefixMax[key]?[end - 1];
   }
 
   List<double> valuesBefore(String key, String beforeDate) {

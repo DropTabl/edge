@@ -7709,7 +7709,18 @@ class BleEngine {
     // An offload is the one thing that genuinely needs the fast interval; as
     // soon as it ends the link steps back down (issue #200).
     unawaited(_applyLinkPriority());
-    onOffloadState?.call(active);
+    // This is a CALLER-SUPPLIED hook (UI state plumbing), called synchronously
+    // from _enqueueOffloadFrame BEFORE it kicks off _drainOffloadFrames — a
+    // throw here must never abort the frame from reaching the drain queue.
+    // The frame is already in _offloadFrames by the time this runs; letting
+    // an exception here propagate up would skip the
+    // `unawaited(_drainOffloadFrames(session))` call for this frame (self-
+    // heals on the next enqueue, but there is no reason to depend on that).
+    try {
+      onOffloadState?.call(active);
+    } catch (e, st) {
+      _log('[BLE] onOffloadState threw: $e\n$st');
+    }
   }
 
   void _setHpsTerminal(
