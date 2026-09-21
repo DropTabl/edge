@@ -395,10 +395,10 @@ class CoachEngine {
 
   String _deriveTitle() {
     for (final it in transcript) {
-      if (it.kind == CoachItemKind.user && (it.text ?? '').trim().isNotEmpty) {
-        final t = it.text!.trim();
-        return t.length > 40 ? '${t.substring(0, 40)}…' : t;
-      }
+      if (it.kind != CoachItemKind.user) continue;
+      final t = (it.text ?? '').trim();
+      if (t.isEmpty) continue;
+      return t.length > 40 ? '${t.substring(0, 40)}…' : t;
     }
     return 'New chat';
   }
