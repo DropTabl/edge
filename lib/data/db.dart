@@ -349,7 +349,7 @@ class LocalDb {
   /// pass it: sqflite throws `ArgumentError('onCreate must be null if no
   /// version is specified')` BEFORE opening anything when `onCreate` is given
   /// without `version` (sqflite_common database_mixin.dart).
-  static const int schemaVersion = 52;
+  static const int schemaVersion = 54;
 
   /// SQLite caps host parameters per statement (`SQLITE_MAX_VARIABLE_NUMBER` —
   /// only 999 on the builds shipped with older Android/iOS). Any `IN (?, ?, …)`
@@ -459,6 +459,7 @@ class LocalDb {
         await _createSleepNap(db);
         await _createWorkoutRoute(db);
         await _createNotifFired(db);
+        await _createNotifSlots(db);
         await _createAlarmSchedule(db);
         await _ensureCoachViews(db);
       },
@@ -1039,6 +1040,26 @@ class LocalDb {
           // adapter.
         }
         if (oldV < 52) {
+          // Smart Wake Window: one additive column, default 0 (off), on an
+          // existing per-weekday row — every existing alarm keeps firing at
+          // exactly its configured time, unchanged. No kAlgoVersion bump:
+          // this is not a health metric.
+          await _addColumnIfMissing(
+            db, 'alarm_schedule', 'smart_window_minutes',
+            'INTEGER NOT NULL DEFAULT 0',
+          );
+        }
+        if (oldV < 53) {
+          // Cross-isolate atomic OS-notification-id slot allocation — the
+          // same TOCTOU hazard `_createNotifFired` fixed for the fire-once
+          // guard, but for id allocation: two isolates could allocate a slot
+          // for two different dedupeKeys in the same category band at nearly
+          // the same instant and land on the same id. Purely additive; the
+          // legacy SharedPreferences-allocated ids are left as-is and simply
+          // stop being consulted for new allocations going forward.
+          await _createNotifSlots(db);
+        }
+        if (oldV < 54) {
           // The WHOOP MG ECG store: three new tables, CREATE TABLE IF NOT
           // EXISTS and NOTHING else — no backfill, no rewrite, no ADD COLUMN,
           // nothing read — so a throw here has nothing to roll back onto
@@ -1046,10 +1067,10 @@ class LocalDb {
           // _ensureCoachViews on the onOpen repair pass, after every table
           // exists. Ships without a kAlgoVersion bump: nothing derived moves.
           //
-          // This rung is 52, not 51: main took 51 for multi-device
-          // attribution (M3) while this feature was on its own branch, so the
-          // store moved up one rather than share a rung with a different
-          // migration.
+          // This rung is 54: main took 51 for multi-device attribution (M3),
+          // 52 for Smart Wake Window and 53 for notif-slot allocation while
+          // this feature was on its own branch, so the store moved up to the
+          // next free rung rather than collide with any of them.
           await _createEcgTables(db);
         }
       },
@@ -1131,12 +1152,84 @@ class LocalDb {
     await _ensureDayResultSkippedColumn(db);
     await _ensureDayResultPartialColumn(db);
     await _createNotifFired(db);
+    await _createNotifSlots(db);
     await _createAlarmSchedule(db);
+    // CREATE TABLE IF NOT EXISTS on the every-open repair path, no schema
+    // version bump needed — additive, no backfill (see _createImportedWorkout
+    // just above for the same reasoning).
+    await _createLiveWorkoutTally(db);
+    await _addColumnIfMissing(
+      db, 'alarm_schedule', 'smart_window_minutes',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
     await _createEcgTables(db);
     // Views LAST — they depend on metric_series / day_result / baselines / sessions
     // / notifications all existing. DROP+CREATE so a shape change takes effect.
     await _ensureCoachViews(db);
     await _dropRawStore(db);
+  }
+
+  /// Periodic snapshot of a LIVE workout's per-second tallies (per-minute HR
+  /// series, zone-seconds, the calorie bpm histogram, the spike-suppressed
+  /// peak) — written every ~30s by `AppState._tickWorkout` while a session is
+  /// live. On a hard-kill relaunch mid-workout, `_reconcileOrphanedLiveWorkout`
+  /// restores from the newest row instead of zeroing strain/calories/zone
+  /// minutes back to nothing. Deleted once the workout finishes or is
+  /// cancelled — this is scratch state for one in-progress session, never a
+  /// historical record.
+  static Future<void> _createLiveWorkoutTally(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS live_workout_tally (
+        workout_id     TEXT PRIMARY KEY,
+        updated_ts     INTEGER NOT NULL,
+        per_minute_hr  TEXT NOT NULL,
+        zone_seconds   TEXT NOT NULL,
+        seconds_by_bpm TEXT NOT NULL,
+        max_hr_seen    INTEGER NOT NULL DEFAULT 0
+      )
+    ''');
+  }
+
+  /// Upsert the latest tally snapshot for [workoutId]. Best-effort — a failed
+  /// write just means the NEXT periodic tick tries again; it must never take
+  /// down the live tick loop itself.
+  static Future<void> saveLiveWorkoutTally(Map<String, Object?> row) async {
+    final db = await instance;
+    await db.insert(
+      'live_workout_tally',
+      row,
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// The persisted tally row for [workoutId], or null if this session was
+  /// never ticked long enough to be snapshotted (or predates this feature).
+  static Future<Map<String, Object?>?> liveWorkoutTally(
+    String workoutId,
+  ) async {
+    final db = await instance;
+    final rows = await db.query(
+      'live_workout_tally',
+      where: 'workout_id = ?',
+      whereArgs: [workoutId],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : rows.first;
+  }
+
+  /// Drop the tally row for [workoutId] once it is no longer live (finished,
+  /// cancelled, or reconciled as stale). Best-effort.
+  static Future<void> deleteLiveWorkoutTally(String workoutId) async {
+    try {
+      final db = await instance;
+      await db.delete(
+        'live_workout_tally',
+        where: 'workout_id = ?',
+        whereArgs: [workoutId],
+      );
+    } catch (_) {
+      /* scratch state — a failed cleanup is not worth surfacing */
+    }
   }
 
   /// The column names [table] currently has (empty if the table is absent).
@@ -1463,6 +1556,32 @@ class LocalDb {
     ''');
   }
 
+  /// The cross-isolate OS-notification-id slot allocator (see
+  /// [claimNotifSlot] and lib/notify/notification_ids.dart).
+  ///
+  /// Same root cause as [_createNotifFired]: SharedPreferences' read-then-write
+  /// has no atomicity across isolates, so two derivation isolates allocating a
+  /// slot for two different dedupeKeys in the same category band at nearly the
+  /// same instant can both read the same free candidate and both write it,
+  /// producing the same OS notification id and silently dropping one alert.
+  /// The UNIQUE index on `(category, slot)` is what makes an allocation
+  /// atomic: `INSERT OR IGNORE` either claims the slot or fails, there is no
+  /// window where two writers both believe they own it.
+  static Future<void> _createNotifSlots(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS notif_slots (
+        category TEXT NOT NULL,
+        dedupe_key TEXT NOT NULL,
+        slot INTEGER NOT NULL,
+        PRIMARY KEY (category, dedupe_key)
+      )
+    ''');
+    await db.execute(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_notif_slots_owner '
+      'ON notif_slots(category, slot)',
+    );
+  }
+
   /// Atomically claim [key] for a one-time OS notification fire.
   ///
   /// Returns true iff THIS caller won the claim (the row did not exist and we
@@ -1513,6 +1632,60 @@ class LocalDb {
     return rows.isNotEmpty;
   }
 
+  /// Atomically get-or-allocate the OS notification id slot for
+  /// `(category, dedupeKey)`. Returns the existing slot if one is already
+  /// owned; otherwise probes `bandSize` candidates starting at [startAt] and
+  /// claims the first free one via `INSERT OR IGNORE` against the
+  /// `(category, slot)` UNIQUE index. [startAt] is only a hint for where to
+  /// start probing; correctness comes from the UNIQUE index, not from it
+  /// being fresh — a stale hint just means a few wasted probes, never a
+  /// collision.
+  ///
+  /// Throws if the claim can't be decided — same contract as
+  /// [claimNotifFired] — so the caller falls back to the best-effort
+  /// SharedPreferences scheme rather than silently misallocating.
+  static Future<int> claimNotifSlot(
+    String category,
+    String dedupeKey, {
+    required int startAt,
+    required int bandSize,
+    int maxProbes = 1024,
+  }) async {
+    if (bandSize <= 0) throw ArgumentError('bandSize must be > 0');
+    // maxProbes beyond bandSize can only re-probe candidates already tried
+    // (the modulo wraps), so cap it — this also bounds the DB round-trips a
+    // single transaction can make.
+    final probes = maxProbes < bandSize ? maxProbes : bandSize;
+    final start = startAt % bandSize;
+    final slot = await _guardedWrite<int>((db) async {
+      return db.transaction<int>((txn) async {
+        final existing = await txn.query(
+          'notif_slots',
+          columns: ['slot'],
+          where: 'category = ? AND dedupe_key = ?',
+          whereArgs: [category, dedupeKey],
+          limit: 1,
+        );
+        if (existing.isNotEmpty) return existing.first['slot'] as int;
+
+        for (var i = 0; i < probes; i++) {
+          final candidate = (start + i) % bandSize;
+          await txn.rawInsert(
+            'INSERT OR IGNORE INTO notif_slots(category, dedupe_key, slot) '
+            'VALUES(?, ?, ?)',
+            [category, dedupeKey, candidate],
+          );
+          final n =
+              Sqflite.firstIntValue(await txn.rawQuery('SELECT changes()'));
+          if (n == 1) return candidate;
+        }
+        throw StateError('notif_slots: no free slot within $probes probes');
+      });
+    });
+    if (slot == null) throw StateError('notif_slots: claim undecided');
+    return slot;
+  }
+
   /// Seed claims for [keys] without taking ownership — used once to carry the
   /// legacy SharedPreferences fired-key list over, so keys that already fired
   /// under the old store don't re-fire on the upgrade.
@@ -1560,6 +1733,7 @@ class LocalDb {
         hour    INTEGER NOT NULL,
         minute  INTEGER NOT NULL,
         enabled INTEGER NOT NULL DEFAULT 1,
+        smart_window_minutes INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (weekday)
       )
     ''');
@@ -1765,6 +1939,7 @@ class LocalDb {
     required int hour,
     required int minute,
     required bool enabled,
+    int smartWindowMinutes = 0,
   }) async {
     final db = await instance;
     await db.insert(
@@ -1774,6 +1949,7 @@ class LocalDb {
         'hour': hour,
         'minute': minute,
         'enabled': enabled ? 1 : 0,
+        'smart_window_minutes': smartWindowMinutes,
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
@@ -1785,6 +1961,32 @@ class LocalDb {
   static Future<void> clearAlarmSchedule() async {
     final db = await instance;
     await db.delete('alarm_schedule');
+  }
+
+  /// `decoded_onehz` rows with `rec_ts` (unix seconds) in
+  /// `[sinceEpochSec, untilEpochSec]`, oldest first — hr + accel only. Used by
+  /// the Smart Wake Window check (state/smart_wake.dart) to read a short
+  /// recent slice and the resting baseline that precedes it. No LIMIT: every
+  /// call site passes a window measured in single-digit minutes to ~90
+  /// minutes, at 1 row/sec that is at most a few thousand rows.
+  ///
+  /// Rows with a null hr/ax/ay/az are excluded: those columns are legitimately
+  /// nullable (a v25 record with no usable gravity vector, see the
+  /// v25-exclusion note near `FirmwareAwareR24Decoder().decode`'s call site),
+  /// and `SmartWakeSample.fromRow` requires all four non-null.
+  static Future<List<Map<String, Object?>>> onehzHrAccelBetween(
+    int sinceEpochSec,
+    int untilEpochSec,
+  ) async {
+    final db = await instance;
+    return db.query(
+      'decoded_onehz',
+      columns: const ['rec_ts', 'hr', 'ax', 'ay', 'az'],
+      where: 'rec_ts >= ? AND rec_ts <= ? '
+          'AND hr IS NOT NULL AND ax IS NOT NULL AND ay IS NOT NULL AND az IS NOT NULL',
+      whereArgs: [sinceEpochSec, untilEpochSec],
+      orderBy: 'rec_ts ASC',
+    );
   }
 
   /// sleep_nap — the user's edits to a day's naps.
@@ -2813,6 +3015,12 @@ class LocalDb {
   /// same day can be synced repeatedly as it fills in. So the phone sync is
   /// delete-then-insert scoped to `source = 'phone'`, which is idempotent by
   /// construction and needs no window-clipping. Band rows are untouched.
+  ///
+  /// A `steps == 0` window IS stored, deliberately — it is not "nothing to
+  /// say", it is the phone confirming it saw no motion over that hour, which
+  /// `resolveDaySteps`'s confirmed-still check uses to veto a wrist
+  /// false-positive over the same window. Only a negative count (never
+  /// produced by the reader) or an inverted window is dropped.
   static Future<void> replacePhoneCoverageForDay(
     String day,
     List<({int startTs, int endTs, int steps})> windows,
@@ -2825,7 +3033,7 @@ class LocalDb {
         whereArgs: [day, kStepSourcePhone],
       );
       for (final w in windows) {
-        if (w.steps <= 0 || w.endTs <= w.startTs) continue;
+        if (w.steps < 0 || w.endTs <= w.startTs) continue;
         await txn.insert('live_coverage', {
           'start_ts': w.startTs,
           'end_ts': w.endTs,
@@ -4154,6 +4362,10 @@ class LocalDb {
     // read NULL — the truth for them — and the read path still recomputes from
     // the substrate while it is there.
     await _addColumnIfMissing(db, 'sessions', 'avg_hr', 'INTEGER');
+    // Submax VO2max estimate (ml/kg/min), backfilled from a completed km
+    // route split — see `_submaxVo2maxFromSplits` in local_repository_impl.
+    // ESTIMATE tier always; absent (NULL) is the honest default, not 0.
+    await _addColumnIfMissing(db, 'sessions', 'vo2max_estimate', 'REAL');
     // v43 (TS-09) — SESSION RPE. A SELF-REPORT, and labelled as one everywhere
     // it is ever shown. It exists to score the sessions heart rate cannot see
     // (lifting, climbing, anything intermittent) and its real value is the
@@ -10604,6 +10816,20 @@ class LocalDb {
     await db.update(
       'sessions',
       {'hrr_bpm': hrrBpm},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  /// Backfill a session's submax VO2max estimate, computed once from a
+  /// completed route km split (see `_submaxVo2maxFromSplits`). Never called
+  /// with null — a session that didn't qualify simply never writes here and
+  /// stays NULL, the honest "no estimate" state.
+  static Future<void> setSessionVo2max(String id, double vo2max) async {
+    final db = await instance;
+    await db.update(
+      'sessions',
+      {'vo2max_estimate': vo2max},
       where: 'id = ?',
       whereArgs: [id],
     );

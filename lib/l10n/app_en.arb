@@ -1529,6 +1529,15 @@
       }
     }
   },
+  "welcomeLabResultsWritten": "{n, plural, one{1 lab result written} other{{n} lab results written}}",
+  "@welcomeLabResultsWritten": {
+    "description": "Import result headline/sub: N lab results.",
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
   "welcomeRowsRefused": "{n, plural, one{1 row was refused} other{{n} rows were refused}}",
   "@welcomeRowsRefused": {
     "description": "Status card title: N rows refused.",
@@ -7338,6 +7347,20 @@
   "@homeNothingDerivedBody": {
     "description": "Body shown on a first-run day with nothing derived yet."
   },
+  "homeSyncedThrough": "Synced through {when}",
+  "@homeSyncedThrough": {
+    "description": "Home header line: how far the data we hold reaches, on the band's own clock. {when} is a bare HH:mm when the record is from the day already on screen, or a full day + time otherwise.",
+    "placeholders": {
+      "when": {
+        "type": "String",
+        "example": "11:06"
+      }
+    }
+  },
+  "homeSyncedNever": "No band data yet",
+  "@homeSyncedNever": {
+    "description": "Home header line when no record has ever been banked from a band."
+  },
   "homeSyncingTitle": "Syncing with your band",
   "@homeSyncingTitle": {
     "description": "Title shown on a bare day while records are actively arriving from the band."
@@ -8413,6 +8436,10 @@
   "@sleepDetailNotSleep": {
     "description": "Button: reject this window entirely — it was not sleep at all."
   },
+  "sleepDetailEditNaps": "Naps",
+  "@sleepDetailEditNaps": {
+    "description": "Button: go to the Naps screen for this day, to log or remove a nap."
+  },
   "sleepDetailRejectedTitle": "Marked as not sleep",
   "@sleepDetailRejectedTitle": {
     "description": "Status card title for a night the user rejected outright as not sleep."
@@ -9371,6 +9398,18 @@
   "@activitySetupPrivateLabel": {
     "description": "Label for the private-session toggle on the activity setup screen"
   },
+  "activitySetupWorkLabel": "Work",
+  "@activitySetupWorkLabel": {
+    "description": "Label for the work-interval stepper on the interval activity setup screen"
+  },
+  "activitySetupRestLabel": "Rest",
+  "@activitySetupRestLabel": {
+    "description": "Label for the rest-interval stepper on the interval activity setup screen"
+  },
+  "activitySetupRoundsLabel": "Rounds",
+  "@activitySetupRoundsLabel": {
+    "description": "Label for the round-count stepper on the interval activity setup screen"
+  },
   "activitySetupPrivateDetail": "Hidden from summaries and exports",
   "@activitySetupPrivateDetail": {
     "description": "Detail text under the private-session toggle"
@@ -9736,6 +9775,34 @@
   "@activityZonesAnchorDefault": {
     "description": "Generic fallback explanation of what zone edges are"
   },
+  "activityZonesAnchorManual": "Set by you, not computed — these five thresholds override whatever your age or a measured ceiling would have given you.",
+  "@activityZonesAnchorManual": {
+    "description": "Explanation shown when the user's own manual zone boundaries are in effect"
+  },
+  "activityZonesSetYourOwnLink": "Set your own zones",
+  "@activityZonesSetYourOwnLink": {
+    "description": "Link opening the manual zone-boundary editor, shown when no manual override is set"
+  },
+  "activityZonesEditYourOwnLink": "Edit your own zones",
+  "@activityZonesEditYourOwnLink": {
+    "description": "Link opening the manual zone-boundary editor, shown when a manual override is already set"
+  },
+  "activityZonesEditYourOwnTitle": "Set your own zones",
+  "@activityZonesEditYourOwnTitle": {
+    "description": "Title of the manual zone-boundary editor sheet"
+  },
+  "activityZonesEditYourOwnBody": "Five bpm thresholds, lowest to highest — where each zone starts. Clear all five to go back to the zones we compute for you.",
+  "@activityZonesEditYourOwnBody": {
+    "description": "Explanation text in the manual zone-boundary editor sheet"
+  },
+  "activityZonesNeedAllFive": "All five thresholds are needed, lowest to highest. Nothing was saved.",
+  "@activityZonesNeedAllFive": {
+    "description": "Error shown when only some of the five manual zone fields were filled in"
+  },
+  "activityZonesMustAscend": "Each zone must start higher than the last. Nothing was saved.",
+  "@activityZonesMustAscend": {
+    "description": "Error shown when the five manual zone thresholds are not strictly ascending"
+  },
   "activityZonesNotShownTitle": "Not shown yet",
   "@activityZonesNotShownTitle": {
     "description": "Status card title when the 28-day intensity distribution is not yet shown"
@@ -9895,6 +9962,10 @@
   "activitySummaryChangeType": "Change activity type",
   "@activitySummaryChangeType": {
     "description": "Semantic label on the pencil icon that lets the user correct the activity type"
+  },
+  "activitySummaryShareToStrava": "Share to Strava",
+  "@activitySummaryShareToStrava": {
+    "description": "Label on the button that exports the recorded route as a GPX file to the OS share sheet for manual upload to Strava (or anywhere else that reads GPX) — no Strava account or API call involved"
   },
   "activitySummaryUnsavedTitle": "This session is not saved yet",
   "@activitySummaryUnsavedTitle": {
@@ -11116,6 +11187,27 @@
   "settingsAlarmRowSub": "Buzzes on your wrist, on the band’s own clock",
   "@settingsAlarmRowSub": {
     "description": "Settings row subtitle describing the band alarm"
+  },
+  "settingsZoneAlertRowTitle": "HR zone alert",
+  "@settingsZoneAlertRowTitle": {
+    "description": "Settings row title for the live-workout HR zone crossing haptic"
+  },
+  "settingsZoneAlertRowSub": "Buzz when your heart rate crosses into or out of the target zone during a live workout",
+  "@settingsZoneAlertRowSub": {
+    "description": "Settings row subtitle for the HR zone alert toggle"
+  },
+  "settingsZoneAlertTargetRowTitle": "Target zone",
+  "@settingsZoneAlertTargetRowTitle": {
+    "description": "Settings row title for picking which HR zone the alert watches"
+  },
+  "settingsZoneAlertTargetRowValue": "Zone {zone}",
+  "@settingsZoneAlertTargetRowValue": {
+    "description": "Value shown on the target-zone row, e.g. Zone 3",
+    "placeholders": {
+      "zone": {
+        "type": "int"
+      }
+    }
   },
   "settingsGroupThisPhone": "This phone",
   "@settingsGroupThisPhone": {

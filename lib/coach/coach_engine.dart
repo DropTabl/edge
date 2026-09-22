@@ -164,7 +164,24 @@ class CoachEngine {
   final CoachConfig config;
   final LocalRepository api;
   final String storageKey; // per-user, so accounts don't share a transcript
-  final http.Client _http = http.Client();
+  final http.Client _http;
+
+  /// Count of [send] calls currently inside their provider call(s). A local
+  /// model can take minutes to answer, and the screen that started the call
+  /// is routinely gone before it finishes — navigated away, or the app
+  /// backgrounded and the route rebuilt. [dispose] must not close [_http]
+  /// while this is above zero: doing so aborts whichever request(s) are still
+  /// in flight out from under them, and the failure lands in a screen state
+  /// (the caller's `mounted` checks) that no longer exists to show it — total
+  /// silence instead of an answer or a real error. A plain bool here would
+  /// under-count: if two `send` calls overlap, the first to finish would flip
+  /// it false and let a requested dispose close the client on the second.
+  int _sending = 0;
+
+  /// Set by [requestDispose] when it is called while [_sending] is above
+  /// zero. The actual close happens once the last overlapping [send]'s
+  /// `finally` sees the count reach zero, not before.
+  bool _disposeRequested = false;
 
   // OpenAI-format running history (system is added per-request) — the context we
   // resend every turn so the model remembers the conversation.
@@ -201,7 +218,12 @@ class CoachEngine {
     'Pulling the thread…',
   ];
 
-  CoachEngine({required this.config, required this.api, this.storageKey = 'anon'});
+  CoachEngine({
+    required this.config,
+    required this.api,
+    this.storageKey = 'anon',
+    http.Client? client,
+  }) : _http = client ?? http.Client();
 
   // ── prompt size ceilings ────────────────────────────────────────────────────
   //
@@ -389,10 +411,10 @@ class CoachEngine {
 
   String _deriveTitle() {
     for (final it in transcript) {
-      if (it.kind == CoachItemKind.user && (it.text ?? '').trim().isNotEmpty) {
-        final t = it.text!.trim();
-        return t.length > 40 ? '${t.substring(0, 40)}…' : t;
-      }
+      if (it.kind != CoachItemKind.user) continue;
+      final t = (it.text ?? '').trim();
+      if (t.isEmpty) continue;
+      return t.length > 40 ? '${t.substring(0, 40)}…' : t;
     }
     return 'New chat';
   }
@@ -462,6 +484,21 @@ class CoachEngine {
   /// [onStatus]; asks the user to confirm writes via [confirm] (returns true to
   /// proceed). Returns when the model produces its final answer (or hits the cap).
   Future<void> send(
+    String userText, {
+    required void Function(CoachItem) onItem,
+    required void Function(String?) onStatus,
+    required Future<bool> Function(ActionRequest) confirm,
+  }) async {
+    _sending++;
+    try {
+      await _send(userText, onItem: onItem, onStatus: onStatus, confirm: confirm);
+    } finally {
+      _sending--;
+      if (_sending == 0 && _disposeRequested) dispose();
+    }
+  }
+
+  Future<void> _send(
     String userText, {
     required void Function(CoachItem) onItem,
     required void Function(String?) onStatus,
@@ -637,12 +674,12 @@ class CoachEngine {
           .post(
             Uri.parse('${config.apiBase}/chat/completions'),
             headers: {
-              'Authorization': 'Bearer ${config.apiKey}',
+              if (config.hasKey) 'Authorization': 'Bearer ${config.apiKey}',
               'content-type': 'application/json',
             },
             body: payload,
           )
-          .timeout(const Duration(seconds: 120));
+          .timeout(config.requestTimeout);
       if (resp.statusCode != 200) {
         throw CoachException(
             'Provider error (${resp.statusCode}): ${_briefErr(resp.body)}');
@@ -758,20 +795,22 @@ class CoachEngine {
 
         // actions (confirmed)
         case 'log_journal':
+          final journalDate = CoachActions.day(args['date']);
           return await _action(confirm, ActionRequest(
             tool: name, title: 'Log journal',
-            summary: 'Add journal for ${args['date']}: tags ${args['tags'] ?? []}, note "${args['note'] ?? ''}".',
+            summary: 'Add journal for $journalDate: tags ${args['tags'] ?? []}, note "${args['note'] ?? ''}".',
             args: args,
           ), () async {
-            await api.postJournal('${args['date']}',
+            await api.postJournal(journalDate,
                 ((args['tags'] as List?) ?? const []).map((e) => '$e').toList(), '${args['note'] ?? ''}');
             return 'Journal saved.';
           });
         case 'log_period':
+          final periodDate = CoachActions.day(args['date']);
           return await _action(confirm, ActionRequest(
             tool: name, title: 'Log period',
-            summary: 'Log a period start on ${args['date']}.', args: args,
-          ), () async { await api.postCycleLog('${args['date']}', kind: 'start'); return 'Period logged.'; });
+            summary: 'Log a period start on $periodDate.', args: args,
+          ), () async { await api.postCycleLog(periodDate, kind: 'start'); return 'Period logged.'; });
         case 'start_workout':
           return await _action(confirm, ActionRequest(
             tool: name, title: 'Start workout',
@@ -886,6 +925,19 @@ class CoachEngine {
   }
 
   void dispose() => _http.close();
+
+  /// What the screen should call instead of [dispose] directly. Closing
+  /// [_http] while [send] is mid-flight aborts that request; deferring the
+  /// close until [send]'s own `finally` sees it land is what lets a user
+  /// navigate away from the coach screen without losing an in-progress
+  /// answer.
+  void requestDispose() {
+    if (_sending > 0) {
+      _disposeRequested = true;
+    } else {
+      dispose();
+    }
+  }
 
   // ── tool schema (OpenAI format) ───────────────────────────────────────────────
   static Map<String, dynamic> _fn(String name, String desc, Map<String, dynamic> props, [List<String> required = const []]) => {
@@ -1049,9 +1101,11 @@ class CoachEngine {
           'state': {'type': 'string', 'enum': ['taken', 'skipped', 'not_taken']},
         }, ['name', 'state']),
     _fn('log_journal', 'Log a journal entry (asks the user to confirm).', {
-      'date': {'type': 'string'}, 'tags': {'type': 'array', 'items': {'type': 'string'}}, 'note': {'type': 'string'},
-    }, ['date']),
-    _fn('log_period', 'Log a period start (asks the user to confirm).', {'date': {'type': 'string'}}, ['date']),
+      'date': {'type': 'string', 'description': 'YYYY-MM-DD, default today'},
+      'tags': {'type': 'array', 'items': {'type': 'string'}}, 'note': {'type': 'string'},
+    }),
+    _fn('log_period', 'Log a period start (asks the user to confirm).',
+        {'date': {'type': 'string', 'description': 'YYYY-MM-DD, default today'}}),
     _fn('start_workout', 'Start a live workout (asks the user to confirm).', {'type': {'type': 'string'}}),
     _fn('end_workout', 'End the active workout (asks the user to confirm).', {'workout_id': {'type': 'string'}}, ['workout_id']),
     _fn('set_step_goal', 'Set the daily step goal (asks the user to confirm).', {'goal': {'type': 'integer'}}, ['goal']),

@@ -169,7 +169,12 @@ class _CoachScreenState extends State<CoachScreen> {
   void dispose() {
     _input.dispose();
     _scroll.dispose();
-    _engine?.dispose();
+    // Not `_engine?.dispose()`: a `send` can still be in flight (a local
+    // model's first response can take minutes), and closing the shared HTTP
+    // client out from under it aborts the request instead of letting it land.
+    // `requestDispose` defers the actual close until `send`'s own `finally`
+    // sees it — see coach_engine.dart.
+    _engine?.requestDispose();
     super.dispose();
   }
 
@@ -808,10 +813,28 @@ class _CoachSetupState extends State<CoachSetup> {
   late final TextEditingController _base;
   late final TextEditingController _key;
   late final TextEditingController _search;
+  late final TextEditingController _timeout;
   String _model = '';
   List<String> _models = const [];
   bool _loading = false;
   String? _msg;
+
+  /// The origin whatever key is currently STORED (in the keychain, not just
+  /// visible in [_key]) belongs to. Set at init and only ever advanced by
+  /// [_onBaseChanged] or a successful [_save] — never by [_key] itself, so
+  /// that clearing the field programmatically doesn't erase the record of an
+  /// origin change still needing [_pendingKeyDelete] applied.
+  late String _keyOrigin;
+
+  /// True once the base URL has moved to a different origin than [_keyOrigin]
+  /// and no replacement key has been typed since. [_save] must force-delete
+  /// the stored key in this case rather than leaving it untouched — the
+  /// field reading empty is NOT proof there is nothing to delete: a key that
+  /// exists but could not be read (`CoachConfig.keyUnreadable`) also seeds
+  /// [_key] empty, and without this flag that "empty" was indistinguishable
+  /// from "no key ever existed", so the old, unreadable key survived the
+  /// origin change and was later sent to the new endpoint.
+  bool _pendingKeyDelete = false;
 
   @override
   void initState() {
@@ -820,7 +843,9 @@ class _CoachSetupState extends State<CoachSetup> {
     _base = TextEditingController(text: cfg.baseUrl);
     _key = TextEditingController(text: cfg.apiKey ?? '');
     _search = TextEditingController();
+    _timeout = TextEditingController(text: cfg.timeoutSeconds.toString());
     _model = cfg.model;
+    _keyOrigin = coachEndpointOrigin(cfg.baseUrl);
     // The base URL decides which preset is lit and whether a key is needed, and
     // the search box filters the list — both are read during build, so both
     // have to rebuild it.
@@ -828,8 +853,31 @@ class _CoachSetupState extends State<CoachSetup> {
       if (mounted) setState(() {});
     }
 
-    _base.addListener(redraw);
+    _base.addListener(_onBaseChanged);
+    // Deliberately NOT tracked via a _key listener: an early attempt cleared
+    // _pendingKeyDelete as soon as the user typed a replacement, but typing
+    // one and then erasing it left the flag cleared with nothing to show for
+    // it — coachApiKeyToSave, called from _save with the CURRENT _key.text,
+    // already derives "is there a real replacement right now" correctly by
+    // checking the trimmed text itself; _pendingKeyDelete only needs to say
+    // whether the endpoint changed, not track the field's history.
     _search.addListener(redraw);
+  }
+
+  /// Clears a carried-over key rather than letting Save silently send it to a
+  /// DIFFERENT origin than the one it was typed for — switching presets, or
+  /// editing the base URL to point somewhere else, must not reuse a cloud key
+  /// against a new local/private endpoint (or vice versa) without the user
+  /// re-entering it.
+  void _onBaseChanged() {
+    final origin = coachEndpointOrigin(_base.text);
+    if (origin != _keyOrigin) {
+      _keyOrigin = origin;
+      _pendingKeyDelete = true;
+      if (_key.text.isNotEmpty) _key.clear();
+      _msg = 'The API key was cleared because the endpoint changed.';
+    }
+    if (mounted) setState(() {});
   }
 
   @override
@@ -837,13 +885,11 @@ class _CoachSetupState extends State<CoachSetup> {
     _base.dispose();
     _key.dispose();
     _search.dispose();
+    _timeout.dispose();
     super.dispose();
   }
 
-  bool get _isLocal {
-    final h = Uri.tryParse(_base.text.trim())?.host.toLowerCase() ?? '';
-    return h == 'localhost' || h == '127.0.0.1' || h == '::1';
-  }
+  bool get _isLocal => isLocalCoachHost(_base.text.trim());
 
   Future<void> _fetch() async {
     setState(() {
@@ -883,15 +929,22 @@ class _CoachSetupState extends State<CoachSetup> {
     }
     final cfg = context.read<CoachConfig>();
     final nav = Navigator.of(context);
-    // An empty key field means "delete my key" ONLY when we could show the user
-    // what they are deleting. A key that could not be read seeds the field empty
-    // through no fault of theirs, and saving would delete it unseen.
-    final blindClear = _key.text.trim().isEmpty && cfg.apiKey == null;
+    // The field is hidden for a cloud endpoint (it has no effect there — see
+    // CoachConfig.requestTimeout), so its stale text must not overwrite the
+    // saved local timeout. Garbage or blank input for a local endpoint leaves
+    // the existing timeout untouched (CoachConfig also rejects <=0) rather
+    // than blocking the rest of the save over one bad field.
+    final timeoutSeconds = _isLocal ? int.tryParse(_timeout.text.trim()) : null;
     try {
       await cfg.save(
         baseUrl: _base.text,
-        apiKey: blindClear ? null : _key.text,
+        apiKey: coachApiKeyToSave(
+          keyText: _key.text,
+          storedKeyReadable: cfg.apiKey != null,
+          pendingKeyDelete: _pendingKeyDelete,
+        ),
         model: chosen,
+        timeoutSeconds: timeoutSeconds,
       );
     } catch (e) {
       if (mounted) {
@@ -900,6 +953,7 @@ class _CoachSetupState extends State<CoachSetup> {
       }
       return;
     }
+    _pendingKeyDelete = false;
     if (mounted && nav.canPop()) nav.pop();
   }
 
@@ -943,10 +997,15 @@ class _CoachSetupState extends State<CoachSetup> {
                                     )
                                   : p.card2,
                               onTap: () => setState(() {
+                                // BEFORE assigning _base.text: that assignment
+                                // fires _onBaseChanged synchronously, which
+                                // may set _msg to explain a cleared key —
+                                // clearing _msg after it runs would silently
+                                // discard that explanation.
+                                _msg = null;
                                 _base.text = preset.baseUrl;
                                 _models = const [];
                                 _model = '';
-                                _msg = null;
                               }),
                               child: Row(
                                 children: [
@@ -1074,6 +1133,22 @@ class _CoachSetupState extends State<CoachSetup> {
                       ),
                     ),
                   ),
+                  if (_isLocal) ...[
+                    const SizedBox(height: S.x4),
+                    OsTextField(
+                      controller: _timeout,
+                      label: 'Request timeout (seconds)',
+                      hint: '300',
+                      keyboard: TextInputType.number,
+                    ),
+                    const SizedBox(height: S.x3),
+                    Text(
+                      'A local model can take a while to load before its first '
+                      'reply. Default is 5 minutes (300s). Cloud providers use '
+                      'a fixed 2-minute timeout and are not affected by this.',
+                      style: F.cap.copyWith(color: p.ink3, height: 1.5),
+                    ),
+                  ],
                   const SizedBox(height: S.x4),
                   BigButton(
                     l?.actionSave ?? 'Save',

@@ -937,17 +937,19 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: "1fa8144a5e3b728ce91eeed6ecbc15d482933b44"
-      resolved-ref: "1fa8144a5e3b728ce91eeed6ecbc15d482933b44"
+      ref: "01e8b6e02b2370ae42490a678e6a0a4e3569104c"
+      resolved-ref: "01e8b6e02b2370ae42490a678e6a0a4e3569104c"
       url: "https://github.com/OpenStrap/analytics.git"
     source: git
     version: "1.0.0"
   openstrap_protocol:
     dependency: "direct main"
     description:
-      path: "/home/alex/Documents/protocol-worktrees/mg-ecg-parser"
-      relative: false
-    source: path
+      path: "."
+      ref: bc7d8d0df706e40a2546ffde4545263f09d0fecb
+      resolved-ref: bc7d8d0df706e40a2546ffde4545263f09d0fecb
+      url: "https://github.com/OpenStrap/protocol.git"
+    source: git
     version: "1.0.0"
   ota_update:
     dependency: "direct main"
