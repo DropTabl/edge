@@ -2157,7 +2157,45 @@ class _DeriveScope {
 typedef _DatedValue = ({String date, double value});
 
 class _BaselineHistoryCache {
-  _BaselineHistoryCache(this._series);
+  _BaselineHistoryCache(this._series)
+      : _prefixMax = {
+          for (final entry in _series.entries)
+            entry.key: _buildPrefixMax(entry.value),
+        };
+
+  /// `_prefixMax[key][i]` = the largest value among `_series[key][0..i]`
+  /// inclusive. Built once here (the series is frozen for the sweep) so
+  /// [maxBefore] can answer in O(log n) instead of rescanning the whole
+  /// series on every call — a full-history rescan per target day, per
+  /// baseline key, made a sweep over N days of history O(N²).
+  static List<double> _buildPrefixMax(List<_DatedValue> series) {
+    final out = List<double>.filled(series.length, 0);
+    var best = double.negativeInfinity;
+    for (var i = 0; i < series.length; i++) {
+      if (series[i].value > best) best = series[i].value;
+      out[i] = best;
+    }
+    return out;
+  }
+
+  /// The count of entries in [series] (sorted ascending by date) whose date
+  /// is strictly before [beforeDate] — i.e. the exclusive end index of the
+  /// "before" window. Binary search: [series] is immutable for the sweep and
+  /// already date-ascending (see [_series]'s doc comment).
+  static int _beforeIndex(List<_DatedValue> series, String beforeDate) {
+    var lo = 0, hi = series.length;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      if (series[mid].date.compareTo(beforeDate) < 0) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
+  }
+
+  final Map<String, List<double>> _prefixMax;
 
   /// The baseline series this cache carries, keyed by `metric_series.key`.
   static const List<String> keys = [
@@ -2304,18 +2342,22 @@ class _BaselineHistoryCache {
   /// saying why. The date it happened is shown next to it, so an old one is
   /// visible rather than anonymous.
   double? maxBefore(String key, String beforeDate) {
-    double? best;
-    for (final s in _series[key] ?? const <_DatedValue>[]) {
-      if (s.date.compareTo(beforeDate) >= 0) continue;
-      if (best == null || s.value > best) best = s.value;
-    }
-    return best;
+    final series = _series[key] ?? const <_DatedValue>[];
+    final end = _beforeIndex(series, beforeDate);
+    if (end == 0) return null;
+    // Every key present in _series has a matching _prefixMax entry by
+    // construction (built together in the constructor from the same
+    // entries) — this is unreachable today, but `?[...]` costs nothing and
+    // survives a future refactor that builds one map without the other.
+    return _prefixMax[key]?[end - 1];
   }
 
-  List<double> valuesBefore(String key, String beforeDate) => _trailing([
-        for (final s in _series[key] ?? const <_DatedValue>[])
-          if (s.date.compareTo(beforeDate) < 0) s,
-      ]);
+  List<double> valuesBefore(String key, String beforeDate) {
+    final series = _series[key] ?? const <_DatedValue>[];
+    final end = _beforeIndex(series, beforeDate);
+    final from = end <= _baselineWindowDays ? 0 : end - _baselineWindowDays;
+    return [for (var i = from; i < end; i++) series[i].value];
+  }
 
   static List<double> _trailing(List<_DatedValue> samples) {
     final from = samples.length <= _baselineWindowDays

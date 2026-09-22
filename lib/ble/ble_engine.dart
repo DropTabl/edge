@@ -3833,6 +3833,12 @@ class BleEngine {
         // Ignore notifications from a session we've already torn down.
         if (_session != session || !session.connected) return;
         _lastRx = DateTime.now();
+        // A malformed/corrupt chunk (framer bug on an unusual firmware
+        // revision) must not become an uncaught async error that silently
+        // stops this characteristic's whole notification stream — degrade
+        // by dropping this chunk and logging, same discipline as every other
+        // failure path in this file.
+        try {
         for (final frame in session.asm[role]!.feed(chunk)) {
           if (frame.decodable) {
             _onFrame(role, frame, session);
@@ -3883,6 +3889,9 @@ class BleEngine {
             // returns early for the whole of an offload.
             unawaited(_reconcileLive());
           }
+        }
+        } catch (e, st) {
+          _log('[BLE] notify handler threw on role=$role: $e\n$st');
         }
       }),
     );
@@ -4409,33 +4418,43 @@ class BleEngine {
 
   // ── frame handling ─────────────────────────────────────────────────────────────
   void _onFrame(String role, Frame frame, _Session session) {
-    final pt = frame.packetType;
-    // Metadata ALWAYS takes the serialized queue, whatever characteristic it
-    // was reassembled on. It used to take the queue only on the `data` role;
-    // metadata off `cmd_from`/`events` was fired unawaited on the immediate
-    // path — the one route that could run a HISTORY_END handler CONCURRENTLY
-    // with the queued drain, i.e. two handlers on the same DrainController,
-    // where one snapshots an empty buffer and writes its ACK before the
-    // other's commit is durable. See [FrameRoutePolicy].
-    final route = FrameRoutePolicy.route(
-      isMetadata: pt == PacketType.metadata,
-      isHistorical: pt == PacketType.historicalData,
-      isDataRole: role == 'data',
-      isBurstCountMember: isBurstCountMemberType(pt),
-      offloadActive: _offloadActive,
-    );
-    switch (route) {
-      case FrameRoute.serializedQueue:
-        _enqueueOffloadFrame(frame, session);
-      case FrameRoute.immediateAndCount:
-        // Process inline first (unchanged behaviour: wrist/battery/alarm and
-        // console text must not wait behind an offload commit), then enqueue
-        // the SAME frame so only its burst COUNT is applied in arrival order,
-        // in the burst window the band sent it in. See [FrameRoute].
-        _processImmediateFrame(frame);
-        _enqueueOffloadFrame(frame, session);
-      case FrameRoute.immediate:
-        _processImmediateFrame(frame);
+    // Both callers (the notify hot path and the immediate-processing path)
+    // route through here, so one guard covers both: a decode/dispatch
+    // exception on ONE frame must degrade (log + drop that frame) rather
+    // than propagate uncaught out of a BLE notify callback and silently
+    // stop this characteristic's whole notification stream.
+    try {
+      final pt = frame.packetType;
+      // Metadata ALWAYS takes the serialized queue, whatever characteristic
+      // it was reassembled on. It used to take the queue only on the `data`
+      // role; metadata off `cmd_from`/`events` was fired unawaited on the
+      // immediate path — the one route that could run a HISTORY_END handler
+      // CONCURRENTLY with the queued drain, i.e. two handlers on the same
+      // DrainController, where one snapshots an empty buffer and writes its
+      // ACK before the other's commit is durable. See [FrameRoutePolicy].
+      final route = FrameRoutePolicy.route(
+        isMetadata: pt == PacketType.metadata,
+        isHistorical: pt == PacketType.historicalData,
+        isDataRole: role == 'data',
+        isBurstCountMember: isBurstCountMemberType(pt),
+        offloadActive: _offloadActive,
+      );
+      switch (route) {
+        case FrameRoute.serializedQueue:
+          _enqueueOffloadFrame(frame, session);
+        case FrameRoute.immediateAndCount:
+          // Process inline first (unchanged behaviour: wrist/battery/alarm
+          // and console text must not wait behind an offload commit), then
+          // enqueue the SAME frame so only its burst COUNT is applied in
+          // arrival order, in the burst window the band sent it in. See
+          // [FrameRoute].
+          _processImmediateFrame(frame);
+          _enqueueOffloadFrame(frame, session);
+        case FrameRoute.immediate:
+          _processImmediateFrame(frame);
+      }
+    } catch (e, st) {
+      _log('[BLE] _onFrame threw on role=$role pt=${frame.packetType}: $e\n$st');
     }
   }
 
@@ -7690,7 +7709,18 @@ class BleEngine {
     // An offload is the one thing that genuinely needs the fast interval; as
     // soon as it ends the link steps back down (issue #200).
     unawaited(_applyLinkPriority());
-    onOffloadState?.call(active);
+    // This is a CALLER-SUPPLIED hook (UI state plumbing), called synchronously
+    // from _enqueueOffloadFrame BEFORE it kicks off _drainOffloadFrames — a
+    // throw here must never abort the frame from reaching the drain queue.
+    // The frame is already in _offloadFrames by the time this runs; letting
+    // an exception here propagate up would skip the
+    // `unawaited(_drainOffloadFrames(session))` call for this frame (self-
+    // heals on the next enqueue, but there is no reason to depend on that).
+    try {
+      onOffloadState?.call(active);
+    } catch (e, st) {
+      _log('[BLE] onOffloadState threw: $e\n$st');
+    }
   }
 
   void _setHpsTerminal(
