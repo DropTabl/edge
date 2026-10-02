@@ -150,9 +150,13 @@ const _specs = <String, MetricSpec>{
     icon: LucideIcons.wind,
     higherBetter: false,
     method: 'Breathing rate recovered from respiratory sinus arrhythmia — the '
-        'periodic modulation breathing imposes on beat timing — over a grid of '
-        'candidate rates.',
-    citation: 'Pimentel 2017',
+        'periodic modulation breathing imposes on beat timing. The spectral '
+        'peak is found in overlapping five-minute stretches of clean beats '
+        '(Lomb–Scargle on native beat times) and the night\'s rate is their '
+        'median, reported only when most stretches agree. At a sleeping heart '
+        'rate near or below 48 bpm the beats are too slow to resolve normal '
+        'breathing, and the rate is withheld.',
+    citation: 'Welch 1967 · Lomb–Scargle (Press & Rybicki 1989)',
     requires: {InputSignal.rrIntervals},
   ),
   'sleep': MetricSpec(
