@@ -4651,6 +4651,10 @@
   "@investigateRmssd": {
     "description": "HRV metric label: RMSSD (kept as scientific abbreviation)"
   },
+  "investigateRmssdNightly": "RMSSD, nightly (mean of 5-min windows)",
+  "@investigateRmssdNightly": {
+    "description": "HRV metric label: the nightly headline RMSSD, the mean of the RMSSDs of the sleep session's 5-minute windows (RMSSD kept as scientific abbreviation)"
+  },
   "investigateSdnn": "SDNN",
   "@investigateSdnn": {
     "description": "HRV metric label: SDNN (kept as scientific abbreviation)"

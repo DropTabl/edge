@@ -373,9 +373,6 @@ class LocalRepositoryImpl extends LocalRepository {
         : (_sub(sleepBundle, 'clinical') ?? const <String, dynamic>{});
     final cd = await _crossDay();
 
-    final hrvTime = clinical['hrv_time'] is Map
-        ? (clinical['hrv_time'] as Map).cast<String, dynamic>()
-        : null;
     final rhrEnv = clinical['resting_hr'] is Map
         ? (clinical['resting_hr'] as Map).cast<String, dynamic>()
         : null;
@@ -512,7 +509,7 @@ class LocalRepositoryImpl extends LocalRepository {
             'baseline': (await _seriesMean('rmssd',
                     before: (sleepBundle?['date'] as String?) ?? todayDay))
                 ?.round(),
-            'confidence': (hrvTime?['confidence'] as num?) ?? 0.5,
+            'confidence': hrvConfidenceForToday(clinical),
           };
 
     return {
@@ -4459,6 +4456,19 @@ Map<String, dynamic>? coachToday(Map<String, dynamic>? crossDay) {
       'rationale': (v['rationale'] ?? '').toString(),
     },
   };
+}
+
+/// The confidence of the /today HRV block: the sleep-session headline's own,
+/// because that is the estimate whose value the block shows — not the
+/// whole-night `hrv_time` envelope's, a different estimator. Bundles always
+/// carry `rmssd_sleep_session`; the trailing fallbacks only cover malformed
+/// rows. Pure + public so the Today seam is unit-testable.
+num hrvConfidenceForToday(Map<String, dynamic> clinical) {
+  final session = clinical['rmssd_sleep_session'];
+  final whole = clinical['hrv_time'];
+  return (session is Map ? session['confidence'] as num? : null) ??
+      (whole is Map ? whole['confidence'] as num? : null) ??
+      0.5;
 }
 
 /// The /today `stress` block from a day bundle — the pipeline's Baevsky block,
