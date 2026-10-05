@@ -95,6 +95,14 @@ void main() {
           'hrv_time': {'confidence': 0.3},
         }),
         0.82);
+    // A bundle derived BEFORE this change can hold a fallback rmssd beside an
+    // absent session envelope: it keeps the confidence it was served with.
+    expect(
+        hrvConfidenceForToday({
+          'rmssd_sleep_session': {'value': '—', 'confidence': 0},
+          'hrv_time': {'confidence': 0.62},
+        }),
+        0.62);
     // Malformed rows only: fall back as before rather than throw.
     expect(hrvConfidenceForToday({'hrv_time': {'confidence': 0.3}}), 0.3);
     expect(hrvConfidenceForToday(const {}), 0.5);

@@ -867,6 +867,10 @@ class LocalRepositoryImpl extends LocalRepository {
       'sdnn': _scalar(b, 'sdnn'),
       'ln_rmssd': _scalar(b, 'ln_rmssd'),
       'baseline': await _seriesMean('rmssd', before: served),
+      // Which estimator `rmssd` came from: the sleep-session mean when this
+      // envelope holds a value; on a bundle derived before `rmssd` became that
+      // single estimator, an earlier fallback stands beside an absent one.
+      'rmssd_sleep_session': _sub(b, 'clinical.rmssd_sleep_session'),
       'hrv_time': _sub(b, 'clinical.hrv_time'),
       'hrv_freq': _sub(b, 'clinical.hrv_freq'),
       'prsa_dc': _sub(b, 'clinical.prsa_dc'),
@@ -4460,15 +4464,26 @@ Map<String, dynamic>? coachToday(Map<String, dynamic>? crossDay) {
 
 /// The confidence of the /today HRV block: the sleep-session headline's own,
 /// because that is the estimate whose value the block shows — not the
-/// whole-night `hrv_time` envelope's, a different estimator. Bundles always
-/// carry `rmssd_sleep_session`; the trailing fallbacks only cover malformed
-/// rows. Pure + public so the Today seam is unit-testable.
+/// whole-night `hrv_time` envelope's, a different estimator. Pure + public so
+/// the Today seam is unit-testable.
+///
+/// LEGACY BUNDLES. A day_result derived before `rmssd` became that single
+/// estimator can hold a FALLBACK `rmssd` (the NREM median or the whole-night
+/// value) beside an absent session envelope (`value: '—'`, confidence 0). The
+/// session's confidence does not describe that number, and 0 would make every
+/// consumer that honours confidence (Health's HRV row: `Metric.isEmpty`) blank
+/// a value the widget, the trends and the baselines still show. Such a bundle
+/// keeps the confidence it was always served with, `hrv_time`'s. A bundle
+/// derived since never reaches that branch: its `rmssd` is null whenever the
+/// session is absent, so no HRV block is built at all.
 num hrvConfidenceForToday(Map<String, dynamic> clinical) {
   final session = clinical['rmssd_sleep_session'];
   final whole = clinical['hrv_time'];
-  return (session is Map ? session['confidence'] as num? : null) ??
-      (whole is Map ? whole['confidence'] as num? : null) ??
-      0.5;
+  final wholeConf = whole is Map ? whole['confidence'] as num? : null;
+  if (rmssdFromSessionEstimator(session)) {
+    return ((session as Map)['confidence'] as num?) ?? wholeConf ?? 0.5;
+  }
+  return wholeConf ?? 0.5;
 }
 
 /// The /today `stress` block from a day bundle — the pipeline's Baevsky block,
