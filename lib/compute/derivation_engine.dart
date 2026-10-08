@@ -2548,15 +2548,22 @@ class _BaselineHistoryCache {
   /// covers: the [_rescanWindowDays] + [_baselineWindowDays] stored days
   /// before the newest.
   ///
-  /// THE NEWEST IS LEFT OUT. It is normally today's, rewritten on every light
-  /// derive as the wake series grows, and the only windows it sits in are of
-  /// days after it — which are not finalized and are re-derived by the
-  /// ordinary passes anyway. Hashing it re-ran the whole rescan window on
-  /// every heavy pass for nothing.
+  /// THE NEWEST IS LEFT OUT while no stored day comes after it. It is then
+  /// normally today's, rewritten on every light derive as the wake series
+  /// grows, and no day yet sits on a window holding it. Hashing it re-ran the
+  /// whole rescan window on every heavy pass for nothing. Once ANY baseline
+  /// series has a later day (one too short to write its own level, say, which
+  /// may already be finalized), that day was priced on it, so it is hashed.
   String _quietFingerprint() {
     final series = _series['quiet_hrr'] ?? const <_DatedValue>[];
     const span = _rescanWindowDays + _baselineWindowDays;
-    final end = series.isEmpty ? 0 : series.length - 1;
+    final newest = series.isEmpty ? null : series.last.date;
+    final laterDay = newest != null &&
+        _series.entries.any((e) =>
+            e.key != 'quiet_hrr' &&
+            e.value.isNotEmpty &&
+            e.value.last.date.compareTo(newest) > 0);
+    final end = series.isEmpty ? 0 : series.length - (laterDay ? 0 : 1);
     final from = end <= span ? 0 : end - span;
     final dated = [
       for (var i = from; i < end; i++)

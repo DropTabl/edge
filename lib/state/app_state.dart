@@ -6378,7 +6378,7 @@ class AppState extends ChangeNotifier {
           await _fillLiveQuietLevel(live);
         } catch (_) {}
       }
-      _rhr28 =await LocalDb.trailingSeriesValues('rhr', 28);
+      _rhr28 = await LocalDb.trailingSeriesValues('rhr', 28);
       final vals = await LocalDb.trailingSeriesValues('rhr', 7);
       if (vals.isEmpty) return;
       _nightlyRhr = vals.last;

@@ -331,5 +331,13 @@ void main() {
     final stable = await debugBaselineSignature();
     await LocalDb.putMetricSeriesValue('2027-01-07', 'quiet_hrr', 0.12);
     expect(await debugBaselineSignature(), stable);
+
+    // …until a LATER day exists that wrote no level of its own (too few wake
+    // minutes) and may already be finalized: it was priced on the newest
+    // level, so moving that level must re-price it.
+    await LocalDb.putMetricSeriesValue('2027-01-08', 'rhr', 52);
+    final withLater = await debugBaselineSignature();
+    await LocalDb.putMetricSeriesValue('2027-01-07', 'quiet_hrr', 0.14);
+    expect(await debugBaselineSignature(), isNot(withLater));
   });
 }
