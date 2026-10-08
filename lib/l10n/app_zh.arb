@@ -912,6 +912,8 @@
   "investigateStrapChipReported": "腕带芯片上报值",
   "investigateTimeDomain": "时域指标",
   "investigateRmssd": "RMSSD",
+  "investigateRmssdNightly": "RMSSD，夜间（5 分钟窗口的均值）",
+  "investigateRmssdStored": "RMSSD，夜间（早期估算）",
   "investigateSdnn": "SDNN",
   "investigateSdann": "SDANN",
   "investigateSdnnIndex": "SDNN 指数",

@@ -950,6 +950,8 @@
   "investigateStrapCounterFactor": "integrierter Zähler · Smartphone-Faktor",
   "investigateTimeDomain": "Zeitbereich",
   "investigateRmssd": "RMSSD",
+  "investigateRmssdNightly": "RMSSD, nächtlich (Mittel der 5-Min.-Fenster)",
+  "investigateRmssdStored": "RMSSD, nächtlich (frühere Schätzung)",
   "investigateSdnn": "SDNN",
   "investigateSdann": "SDANN",
   "investigateSdnnIndex": "SDNN-Index",

@@ -912,6 +912,8 @@
   "investigateStrapChipReported": "puce du bracelet a indiqué",
   "investigateTimeDomain": "Domaine temporel",
   "investigateRmssd": "RMSSD",
+  "investigateRmssdNightly": "RMSSD, nocturne (moyenne des fenêtres de 5 min)",
+  "investigateRmssdStored": "RMSSD, nocturne (estimation antérieure)",
   "investigateSdnn": "SDNN",
   "investigateSdann": "SDANN",
   "investigateSdnnIndex": "Indice SDNN",

@@ -912,6 +912,8 @@
   "investigateStrapChipReported": "बैंड चिप द्वारा दर्ज",
   "investigateTimeDomain": "टाइम डोमेन",
   "investigateRmssd": "RMSSD",
+  "investigateRmssdNightly": "RMSSD, रात का (5-मिनट विंडो का औसत)",
+  "investigateRmssdStored": "RMSSD, रात का (पहले का अनुमान)",
   "investigateSdnn": "SDNN",
   "investigateSdann": "SDANN",
   "investigateSdnnIndex": "SDNN इंडेक्स",

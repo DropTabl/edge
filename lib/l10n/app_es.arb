@@ -912,6 +912,8 @@
   "investigateStrapChipReported": "chip de la banda reportó",
   "investigateTimeDomain": "Dominio del tiempo",
   "investigateRmssd": "RMSSD",
+  "investigateRmssdNightly": "RMSSD, nocturno (media de ventanas de 5 min)",
+  "investigateRmssdStored": "RMSSD, nocturno (estimación anterior)",
   "investigateSdnn": "SDNN",
   "investigateSdann": "SDANN",
   "investigateSdnnIndex": "Índice SDNN",
