@@ -1310,7 +1310,7 @@
   "healthCatMovementLoad": "Movimiento y carga",
   "healthCatBodyWear": "Cuerpo y uso",
   "healthBlurbRestingHr": "El ritmo sostenido más bajo de la noche",
-  "healthBlurbHrv": "RMSSD durante la ventana de sueño más limpia",
+  "healthBlurbHrv": "RMSSD medio de las ventanas de 5 min del sueño",
   "healthBlurbHrvCv": "Cuánto varía eso de una noche a otra",
   "healthBlurbLfHf": "Dónde se concentra la potencia del ritmo cardíaco entre frecuencias",
   "healthBlurbDip": "Cuánto baja tu frecuencia cardíaca mientras duermes",

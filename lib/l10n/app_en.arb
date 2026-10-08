@@ -6745,7 +6745,7 @@
   "@healthBlurbRestingHr": {
     "description": "Explore catalogue one-line description for resting heart rate"
   },
-  "healthBlurbHrv": "RMSSD over the cleanest window of sleep",
+  "healthBlurbHrv": "Mean RMSSD of 5-min windows across sleep",
   "@healthBlurbHrv": {
     "description": "Explore catalogue one-line description for HRV"
   },

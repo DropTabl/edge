@@ -115,11 +115,13 @@ const _specs = <String, MetricSpec>{
     unit: 'ms',
     color: C.green,
     icon: LucideIcons.activity,
-    method: 'RMSSD over the longest artefact-free window during sleep. Beat '
-        'timing is recovered from the band\'s 1 Hz records and corrected by '
-        'the Lipponen–Tarvainen method before any statistic is taken. '
+    method: 'The mean RMSSD of the sleep session\'s five-minute windows. Beat '
+        'timing is recovered from the band\'s 1 Hz records; each window keeps '
+        'only beats that pass an artefact filter, and a window with too few '
+        'clean beat-to-beat differences is left out. No value is shown when '
+        'no window qualifies or the beat stream holds duplicated beats. '
         'Pulse-derived, so this is PRV: real and trendable, but not ECG HRV.',
-    citation: 'Task Force 1996 · Lipponen & Tarvainen 2019',
+    citation: 'Task Force 1996',
     requires: {InputSignal.rrIntervals},
   ),
   'readiness': MetricSpec(

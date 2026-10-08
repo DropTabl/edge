@@ -1354,7 +1354,7 @@
   "healthCatMovementLoad": "Bewegung & Belastung",
   "healthCatBodyWear": "Körper & Tragezeit",
   "healthBlurbRestingHr": "Der niedrigste anhaltende Puls der Nacht",
-  "healthBlurbHrv": "RMSSD im saubersten Schlafabschnitt",
+  "healthBlurbHrv": "Mittlerer RMSSD der 5-Min.-Fenster im Schlaf",
   "healthBlurbHrvCv": "Wie stark das von Nacht zu Nacht schwankt",
   "healthBlurbLfHf": "Wie sich die Herzschlag-Variabilität auf die Frequenzbereiche verteilt",
   "healthBlurbDip": "Wie stark deine Herzfrequenz im Schlaf sinkt",

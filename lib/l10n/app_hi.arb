@@ -1310,7 +1310,7 @@
   "healthCatMovementLoad": "गतिविधि और भार",
   "healthCatBodyWear": "शरीर और पहनावा",
   "healthBlurbRestingHr": "रात की सबसे कम स्थिर दर",
-  "healthBlurbHrv": "नींद के सबसे स्वच्छ समय-खंड पर RMSSD",
+  "healthBlurbHrv": "नींद की 5-मिनट विंडो का औसत RMSSD",
   "healthBlurbHrvCv": "यह रात-दर-रात कितना बदलता है",
   "healthBlurbLfHf": "धड़कन-समय की ऊर्जा विभिन्न आवृत्तियों में कहाँ है",
   "healthBlurbDip": "सोते समय आपकी हृदय गति कितनी गिरती है",
