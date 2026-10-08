@@ -283,8 +283,9 @@ class DayBundleInput {
   /// Trailing nightly RMSSD (ms) — the SAME `rmssd` series the engine writes to
   /// metric_series (the sleep-session mean of 5-min-window RMSSDs; absent when
   /// that estimator abstains). Used as the history for the EWMA hrv baseline so
-  /// its center and today's value are the SAME metric (was previously reconstructed from ln(whole-window RMSSD), a
-  /// definition mismatch that made the z spuriously large).
+  /// its center and today's value are the SAME metric (was previously
+  /// reconstructed from ln(whole-window RMSSD), a definition mismatch that made
+  /// the z spuriously large).
   final List<double> rmssdHistory;
 
   /// Trailing RAW nightly skin-temp ADC means (NOT z-scores). The personal
