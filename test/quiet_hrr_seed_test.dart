@@ -169,5 +169,26 @@ void main() {
       expect(await seedQuietHrrHistoryOnce(ageYears: 35), 0);
       expect(await quietRows(), before);
     });
+
+    test('imports filling the recent rows do not crowd out older measured days',
+        () async {
+      final db = await LocalDb.instance;
+      for (final t in ['day_result', 'metric_series', 'compute_freshness']) {
+        await db.delete(t);
+      }
+      const measured = ['2026-06-01', '2026-06-02', '2026-06-03', '2026-06-04'];
+      for (final d in measured) {
+        await day(d);
+      }
+      // A vendor import newer than all of them, longer than the whole window.
+      for (var i = 0; i < 40; i++) {
+        await day(
+            '2026-07-${(i % 30 + 1).toString().padLeft(2, '0')}'
+                .replaceFirst('07', i < 30 ? '07' : '08'),
+            imported: true);
+      }
+      expect(await seedQuietHrrHistoryOnce(ageYears: 35), 4);
+      expect((await quietRows()).keys.toSet(), measured.toSet());
+    });
   });
 }

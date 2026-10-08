@@ -2801,14 +2801,27 @@ class DerivationEngine {
       // (`compute_freshness`); a failure leaves the key unset and the next pass
       // retries — never fatal to the derive.
       _diag['stage'] = 'quiet_hrr_seed';
+      var seeded = 0;
       try {
-        final seeded = await seedQuietHrrHistoryOnce(
+        seeded = await seedQuietHrrHistoryOnce(
           ageYears: profile.ageYears,
           manualRestingHr: profile.restingHrManual?.toDouble(),
         );
         if (seeded > 0) _log('[derive] quiet_hrr seed: $seeded day(s)');
       } catch (e) {
         _log('[derive] quiet_hrr seed failed (will retry): $e');
+      }
+      // New levels move the baseline signature `rescanRecent` gates on.
+      // Refreshed here, ahead of every early return: on a pass with nothing
+      // to derive nothing else would, and the days the levels now price would
+      // never be re-scored. Its own guard — the seed is already marked done,
+      // so a failure here is not a seed failure; the next refresh catches up.
+      if (seeded > 0) {
+        try {
+          await _refreshBaselines();
+        } catch (e) {
+          _log('[derive] baseline refresh after the quiet_hrr seed failed: $e');
+        }
       }
       _diag['stage'] = 'scope';
       final scope = await _deriveScope(heavy: heavy, force: force);

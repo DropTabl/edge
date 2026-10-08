@@ -168,6 +168,44 @@ void main() {
     expect(await _value('2026-02-03', 'quiet_hrr'), closeTo(0.0545, 0.0005));
   });
 
+  test('a seed that writes levels refreshes the rescan signature', () async {
+    await _clear();
+    // Every day finalized, nothing for a derive to do: the seed is the only
+    // thing that moves the baseline, so it must move the gate too, or
+    // rescanRecent never re-scores the days the new levels now price.
+    for (final day in const ['2026-02-01', '2026-02-02', '2026-02-03']) {
+      await LocalDb.putDayResult(
+        dayId: day,
+        algoVersion: kAlgoVersion,
+        payloadJson: SeriesCodec.encodePayloadJson(jsonEncode({
+          'date': day,
+          'scalars': {'rhr_nocturnal': 55},
+          'series': {
+            'hr_curve': [
+              for (var i = 0; i < 400; i++) {'t': i * 60, 'v': 62},
+            ],
+            'strain_curve': [
+              for (var i = 0; i < 400; i++) {'t': i * 60, 'v': 0.0},
+            ],
+          },
+        })),
+        windowJson: '{}',
+        finalized: true,
+        source: 'band',
+      );
+    }
+    final before = await debugBaselineSignature();
+    await LocalDb.putBaseline(
+        'rolling_artifact', jsonEncode({'signature': before}));
+    await DerivationEngine().run(_profile, heavy: true);
+    final after = await debugBaselineSignature();
+    expect(after, isNot(before), reason: 'the seed moved the quiet levels');
+    final stored = jsonDecode(
+        (await LocalDb.baseline('rolling_artifact'))!['payload_json']
+            as String) as Map;
+    expect(stored['signature'], after);
+  });
+
   // The tests below run real derives over 1 Hz rows — well past the default
   // 30 s once the suite is loaded, hence their explicit budgets.
   test('a first sync of a whole week does not leave it blank', () async {

@@ -85,21 +85,29 @@ Future<int> seedQuietHrrHistoryOnce({
 }) async {
   if (await LocalDb.computeFreshness(kQuietHrrSeedKey) != null) return 0;
   if (ageYears == null) return 0;
-  final rows = await LocalDb.recentDayResults(ana.quietHrrWindowDays + 3);
   final imported = await LocalDb.importedDates();
   final have = {
     for (final r in await LocalDb.metricSeries('quiet_hrr'))
       r['date'] as String,
   };
-  final todo = <(String, String)>[
-    for (final r in rows)
+  // The window is over MEASURED days, chosen before it is applied: a long
+  // import (or a run of skipped/partial rows) newer than them must not fill
+  // the window and leave the levels that are recoverable unseeded. Every
+  // served day, payload-free (LIMIT -1 is SQLite's "no limit"); bundles are
+  // then read one day at a time.
+  final measured = [
+    for (final r in await LocalDb.recentDayResultsMeta(-1))
       if (r['day_id'] is String &&
-          r['payload_json'] is String &&
           !imported.contains(r['day_id']) &&
-          !have.contains(r['day_id']) &&
           (r['skipped'] as num?)?.toInt() != 1 &&
           (r['partial'] as num?)?.toInt() != 1)
-        (r['day_id'] as String, r['payload_json'] as String),
+        r['day_id'] as String,
+  ].take(ana.quietHrrWindowDays + 3);
+  final todo = <(String, String)>[
+    for (final day in measured)
+      if (!have.contains(day))
+        if ((await LocalDb.dayResult(day))?['payload_json'] case final String j)
+          (day, j),
   ];
   final levels = todo.isEmpty
       ? const <(String, double)>[]
