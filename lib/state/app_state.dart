@@ -6371,8 +6371,14 @@ class AppState extends ChangeNotifier {
       // BEFORE the resting-HR early return below: a user with no nightly
       // series still has a quiet level once three days are measured.
       final live = activeWorkout;
-      if (live != null) await _fillLiveQuietLevel(live);
-      _rhr28 = await LocalDb.trailingSeriesValues('rhr', 28);
+      if (live != null) {
+        // Its own guard: a failed fill leaves the gauge at "—" but must not
+        // skip the resting-HR refresh below.
+        try {
+          await _fillLiveQuietLevel(live);
+        } catch (_) {}
+      }
+      _rhr28 =await LocalDb.trailingSeriesValues('rhr', 28);
       final vals = await LocalDb.trailingSeriesValues('rhr', 7);
       if (vals.isEmpty) return;
       _nightlyRhr = vals.last;

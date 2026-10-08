@@ -2803,6 +2803,7 @@ class DerivationEngine {
       _diag['stage'] = 'quiet_hrr_seed';
       try {
         final seeded = await seedQuietHrrHistoryOnce(
+          ageYears: profile.ageYears,
           manualRestingHr: profile.restingHrManual?.toDouble(),
         );
         if (seeded > 0) _log('[derive] quiet_hrr seed: $seeded day(s)');

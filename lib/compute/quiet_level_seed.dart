@@ -22,6 +22,7 @@ import 'package:openstrap_analytics/onehz.dart' as ana;
 
 import '../data/db.dart';
 import '../data/series_codec.dart';
+import 'hr_max.dart';
 
 /// `compute_freshness` key marking the seed as applied.
 const String kQuietHrrSeedKey = 'quiet_hrr_seed_v1';
@@ -30,8 +31,14 @@ const String kQuietHrrSeedKey = 'quiet_hrr_seed_v1';
 /// bundle (`SeriesCodec.decodePayloadJson`, so curves are `[{t, v}]` lists).
 /// [manualRestingHr] stands in only for a missing NOCTURNAL resting HR — the
 /// same pair, in the same order, the day's own TRIMP is anchored on.
+///
+/// The ceiling is [estimatedMaxHr] at the CURRENT profile [ageYears], exactly
+/// what the live derive prices `quiet_hrr` on — not the bundle's stored
+/// `max_hr_used`, which a later birthday or profile edit leaves on another
+/// scale. Null without an age, as the live derive is.
 double? quietHrrFromStoredBundle(
   Map<String, dynamic> payload, {
+  required num? ageYears,
   double? manualRestingHr,
 }) {
   final scalars = payload['scalars'] is Map
@@ -41,7 +48,7 @@ double? quietHrrFromStoredBundle(
       ? payload['series'] as Map
       : const <String, dynamic>{};
   final rhr = (scalars['rhr_nocturnal'] as num?)?.toDouble() ?? manualRestingHr;
-  final hrMax = (payload['max_hr_used'] as num?)?.toDouble();
+  final hrMax = estimatedMaxHr(ageYears, payload['device_family'] as String?);
   final wake = <int>{
     for (final p in (series['strain_curve'] as List? ?? const []))
       if (p is Map && p['t'] is num) (p['t'] as num).toInt(),
@@ -69,8 +76,15 @@ double? quietHrrFromStoredBundle(
 /// reason `putDayResult` skips its series write), and days that already have a
 /// value — a derive's own measurement is never overwritten. Decoding and the
 /// median run off the UI isolate. Returns the number of days written.
-Future<int> seedQuietHrrHistoryOnce({double? manualRestingHr}) async {
+///
+/// Without [ageYears] there is no ceiling to price on: nothing is seeded and
+/// the seed stays armed for a pass that has one.
+Future<int> seedQuietHrrHistoryOnce({
+  required num? ageYears,
+  double? manualRestingHr,
+}) async {
   if (await LocalDb.computeFreshness(kQuietHrrSeedKey) != null) return 0;
+  if (ageYears == null) return 0;
   final rows = await LocalDb.recentDayResults(ana.quietHrrWindowDays + 3);
   final imported = await LocalDb.importedDates();
   final have = {
@@ -93,7 +107,7 @@ Future<int> seedQuietHrrHistoryOnce({double? manualRestingHr}) async {
             for (final (date, json) in todo)
               if (SeriesCodec.decodePayloadJson(json) case final p?)
                 if (quietHrrFromStoredBundle(p,
-                        manualRestingHr: manualRestingHr)
+                        ageYears: ageYears, manualRestingHr: manualRestingHr)
                     case final q?)
                   (date, q),
           ]);

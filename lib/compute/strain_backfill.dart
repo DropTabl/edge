@@ -116,7 +116,10 @@ Future<StrainBackfillResult> backfillStrainScale({
 
   // This user's quiet level, resolved once. Without one there is nothing
   // honest to rescale against, so return WITHOUT marking done: the one-shot
-  // runs again once three days of `quiet_hrr` exist.
+  // runs again once three days of `quiet_hrr` exist. ONE level for every
+  // rescaled day, deliberately: these days predate any per-day level, so a
+  // trailing median per day would mostly be a median of nothing. A live
+  // derive prices each day on its own prior days; the difference is small.
   final quiet = await personalQuietLevelBefore(LocalDb.localDayLabelNow());
   final quietHrr = quiet.value?.hrr;
   if (quietHrr == null) return none;

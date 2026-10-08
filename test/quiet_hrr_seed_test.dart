@@ -41,18 +41,31 @@ Map<String, dynamic> _payload({
 void main() {
   group('quietHrrFromStoredBundle — pure', () {
     test('the wake minutes\' median HRR', () {
-      // 62 bpm against RHR 55 / HRmax 183.5 = 7/128.5.
-      expect(quietHrrFromStoredBundle(_payload()), closeTo(0.0545, 0.0005));
+      // 62 bpm against RHR 55 / HRmax 183.5 (age 35) = 7/128.5.
+      expect(quietHrrFromStoredBundle(_payload(), ageYears: 35), closeTo(0.0545, 0.0005));
+    });
+
+    test('the ceiling comes from the CURRENT age, as the live derive\'s does',
+        () {
+      // The stored bundle was scored on another ceiling (a later birthday, an
+      // edited profile). Seeded and live levels must share one scale: age 40
+      // is HRmax 180, so 7/125 — not 7/95 off the stored 150.
+      final stale = {..._payload(), 'max_hr_used': 150.0};
+      expect(quietHrrFromStoredBundle(stale, ageYears: 40),
+          closeTo(0.056, 0.0005));
+      expect(quietHrrFromStoredBundle(stale, ageYears: null), isNull,
+          reason: 'no age, no ceiling — the live derive abstains too');
     });
 
     test('no strain curve, no wake series — null', () {
-      expect(quietHrrFromStoredBundle(_payload(withCurve: false)), isNull);
+      expect(quietHrrFromStoredBundle(_payload(withCurve: false), ageYears: 35), isNull);
     });
 
     test('no nocturnal RHR — the user-entered one anchors it', () {
       final noRhr = _payload(rhrNocturnal: null);
-      expect(quietHrrFromStoredBundle(noRhr), isNull);
-      expect(quietHrrFromStoredBundle(noRhr, manualRestingHr: 55),
+      expect(quietHrrFromStoredBundle(noRhr, ageYears: 35), isNull);
+      expect(
+          quietHrrFromStoredBundle(noRhr, ageYears: 35, manualRestingHr: 55),
           closeTo(0.0545, 0.0005));
     });
 
@@ -62,7 +75,8 @@ void main() {
       expect(stored, isNot(contains('"strain_curve":[{')),
           reason: 'the codec actually stored a columnar curve');
       final decoded = SeriesCodec.decodePayloadJson(stored)!;
-      expect(quietHrrFromStoredBundle(decoded), closeTo(0.0545, 0.0005));
+      expect(quietHrrFromStoredBundle(decoded, ageYears: 35),
+          closeTo(0.0545, 0.0005));
     });
   });
 
@@ -108,6 +122,14 @@ void main() {
             r['date'] as String: (r['value'] as num).toDouble(),
         };
 
+    test('without an age it seeds nothing and stays armed', () async {
+      await day('2026-08-20');
+      expect(await seedQuietHrrHistoryOnce(ageYears: null), 0);
+      expect(await LocalDb.computeFreshness(kQuietHrrSeedKey), isNull,
+          reason: 'it runs once an age is set');
+      await (await LocalDb.instance).delete('day_result');
+    });
+
     test('seeds once, even with the strain rescale long since done', () async {
       // The population this exists for: an install whose v63 strain rescale
       // already ran, so `backfillStrainScale` returns at its freshness check.
@@ -123,7 +145,7 @@ void main() {
       await LocalDb.putMetricSeriesValue('2026-09-08', 'quiet_hrr', 0.3);
 
       expect((await backfillStrainScale(female: false)).didWork, isFalse);
-      expect(await seedQuietHrrHistoryOnce(), 4);
+      expect(await seedQuietHrrHistoryOnce(ageYears: 35), 4);
 
       final rows = await quietRows();
       expect(rows.keys.toSet(),
@@ -144,7 +166,7 @@ void main() {
       final before = await quietRows();
       // Even a newly stored day is left for its own derive to measure.
       await day('2026-09-09');
-      expect(await seedQuietHrrHistoryOnce(), 0);
+      expect(await seedQuietHrrHistoryOnce(ageYears: 35), 0);
       expect(await quietRows(), before);
     });
   });
