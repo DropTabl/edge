@@ -675,6 +675,9 @@ class _Session {
   /// ([BleEngine._flushForeignBuffer]); re-armed per drained batch with a
   /// foreign record in it.
   Timer? foreignFlushTimer;
+  /// Re-requests history once another client's transfer goes quiet, after a
+  /// claim of ours stood down for it ([BleEngine._armForeignRetrigger]).
+  Timer? foreignRetrigger;
   /// History markers seen for transfers this engine did not request
   /// (diagnostics; the first one logs).
   int foreignMarkersSeen = 0;
@@ -790,6 +793,8 @@ class _Session {
     cancelFirstStartWatchdog();
     foreignFlushTimer?.cancel();
     foreignFlushTimer = null;
+    foreignRetrigger?.cancel();
+    foreignRetrigger = null;
     for (final s in subs) {
       await s.cancel();
     }
@@ -3260,6 +3265,7 @@ class BleEngine {
       _foreignClaimsDeferred++;
       _log('[SYNC] INIT drain DEFERRED — another client is transferring '
           'history on this band; not starting a competing transfer.');
+      _armForeignRetrigger(session);
     }
     // Leftovers of a previous session's task (queued frames, parked
     // continuations) are stale from here — session binding already refuses
@@ -3312,6 +3318,7 @@ class BleEngine {
         _log('[SYNC] INIT drain DEFERRED — another client started '
             'transferring history during INIT; not sending the drain '
             'request into it.');
+        _armForeignRetrigger(session);
       } else {
         _log(
           '[SYNC] INIT did not fully write — no history was requested; '
@@ -4338,11 +4345,12 @@ class BleEngine {
     // Another client on this band is mid-transfer. Starting ours now would
     // put a second request into its session; the window closes on its
     // COMPLETE or after [kForeignHistoryQuietSeconds] without a marker, and
-    // the periodic/foreground/prompt triggers pick up whatever it left.
+    // [_armForeignRetrigger] re-requests once it has.
     if (_foreignHistoryLive) {
       _foreignClaimsDeferred++;
       _log('[SYNC] refresh($reason) deferred — another client is transferring '
           'history on this band; not starting a competing transfer.');
+      _armForeignRetrigger(session);
       return false;
     }
     if (_offloadActive && !d._complete) {
@@ -4460,6 +4468,7 @@ class BleEngine {
       session.ownedTaskGen = null;
       session.idleWatchdog?.cancel();
       _setOffloadActive(false);
+      _armForeignRetrigger(session);
       return false;
     }
     _log('[SYNC] refresh($reason) — sending SEND_HISTORICAL_DATA.');
@@ -4492,6 +4501,7 @@ class BleEngine {
         session.ownedTaskGen = null;
         session.idleWatchdog?.cancel();
         _setOffloadActive(false);
+        if (withheld) _armForeignRetrigger(session);
       }
       return false;
     }
@@ -6128,12 +6138,23 @@ class BleEngine {
     final live = session.foreignHistory.isLive(now);
     if (sub == SyncMeta.historyComplete) {
       session.foreignHistory.ended();
+      // A claim of ours waiting this transfer out need not sit out the quiet
+      // period: re-request after the usual settle.
+      if (session.foreignRetrigger != null) {
+        _armForeignRetrigger(session,
+            after: const Duration(seconds: kHistoricalAbortRetryDelaySeconds));
+      }
     } else if (sub == SyncMeta.historyStart) {
       session.foreignHistory.mark(now, progress: true);
       // A START identifies a NEW transfer: our own task's tail is over as far
       // as this window is concerned, so this transfer's later records and
-      // ENDs may re-open it even after a pause.
-      session.ownTaskTail = false;
+      // ENDs may re-open it even after a pause. EXCEPT inside a claim's
+      // pre-request waits: a START there may be the late answer to our own
+      // aborted request (the retry's case), so its re-offered ENDs must not
+      // keep re-opening the window the claim is waiting out.
+      final claimPending = session.ownedTaskGen == _historyTaskGen &&
+          _historyRequestedGen != _historyTaskGen;
+      if (!claimPending) session.ownTaskTail = false;
     } else if (isData && (!ourTail || live)) {
       session.foreignHistory.mark(now, progress: true);
     } else if (sub == SyncMeta.historyEnd && (!ourTail || live)) {
@@ -6409,6 +6430,35 @@ class BleEngine {
             refreshRange: true,
           ),
         );
+      },
+    );
+  }
+
+  /// A claim of ours stood down for another client's transfer. Nothing else
+  /// re-asks soon (an abort retry's budget may already be spent; periodic is
+  /// 15 min away), so re-request once that transfer is over — on its COMPLETE
+  /// (after the settle) or once its window closes. One timer per link; while
+  /// the window is live it re-checks every quiet period, so it never spins,
+  /// and a request that defers again re-arms it through the same path.
+  void _armForeignRetrigger(_Session session, {Duration? after}) {
+    if (_sessionIsStale(session)) return;
+    session.foreignRetrigger?.cancel();
+    session.foreignRetrigger = Timer(
+      after ?? const Duration(seconds: kForeignHistoryQuietSeconds),
+      () {
+        session.foreignRetrigger = null;
+        if (_sessionIsStale(session)) return;
+        if (session.foreignHistory.isLive(_monotonicSecs())) {
+          _armForeignRetrigger(session);
+          return;
+        }
+        _log('[SYNC] the other client\'s transfer is over — re-requesting '
+            'the history this link deferred.');
+        unawaited(_startHistoricalRefresh(
+          trigger: BackfillTrigger.strap,
+          reason: 'foreign_quiet',
+          refreshRange: true,
+        ));
       },
     );
   }

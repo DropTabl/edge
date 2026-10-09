@@ -1391,8 +1391,17 @@ void main() {
           expect(r.logs.any((l) => l.contains('another client started '
               'transferring history during INIT')), isTrue);
           expect(r.engine.offloadActive, isFalse);
-          async.elapse(const Duration(seconds: 70));
+          async.elapse(const Duration(seconds: 7));
           expect(r.aborts, isEmpty);
+          expect(r.drainRequests, isEmpty);
+          // Once that transfer has gone quiet the deferred drain is
+          // re-requested rather than left for the 15-min periodic timer.
+          async.elapse(const Duration(seconds: 4));
+          expect(r.drainRequests, hasLength(1));
+          async.elapse(const Duration(seconds: 60));
+          expect(r.aborts, hasLength(r.drainRequests.length),
+              reason: 'every abort ends a request that went out, none the '
+                  'deferred claim');
         });
       });
     }
@@ -1442,9 +1451,14 @@ void main() {
         // into it, and the START refilled nothing.
         expect(r.drainRequests, hasLength(1));
         expect(r.engine.offloadSnapshot['no_start_retries'], 1);
+        // ...but it is not stranded: once the window closes it re-requests.
+        async.elapse(const Duration(seconds: 21));
+        expect(r.drainRequests, hasLength(2));
+        // Unanswered again: its own watchdog ends it, and the spent retry
+        // budget stops the chain there.
         async.elapse(const Duration(seconds: 60));
-        expect(r.drainRequests, hasLength(1));
-        expect(r.aborts, hasLength(1));
+        expect(r.drainRequests, hasLength(2));
+        expect(r.aborts, hasLength(2));
       });
     });
 
@@ -1505,8 +1519,10 @@ void main() {
         expect(r.logs.any((l) => l.contains('while this request was queued')),
             isTrue);
         expect(r.engine.offloadActive, isFalse);
-        async.elapse(const Duration(seconds: 70));
-        expect(r.aborts, isEmpty);
+        async.elapse(const Duration(seconds: 11));
+        expect(r.drainRequests, hasLength(1), reason: 're-requested once quiet');
+        async.elapse(const Duration(seconds: 60));
+        expect(r.aborts, hasLength(r.drainRequests.length));
       });
     });
 
@@ -1838,11 +1854,44 @@ void main() {
             r.logs.any((l) => l.contains('another client is transferring')),
             isTrue);
 
-        async.elapse(const Duration(seconds: 11));
-        bool? second;
-        r.engine.debugStartHistoricalRefresh().then((v) => second = v);
-        async.elapse(const Duration(seconds: 1));
-        expect(second, isTrue);
+        // No caller has to come back: the deferred claim re-requests by
+        // itself once the transfer has been quiet for the window.
+        async.elapse(const Duration(seconds: 8));
+        expect(r.drainRequests, isEmpty);
+        async.elapse(const Duration(seconds: 3));
+        expect(r.drainRequests, hasLength(1));
+        expect(r.engine.offloadActive, isTrue);
+      });
+    });
+
+    test('a deferred claim re-requests soon after the foreign COMPLETE', () {
+      fakeAsync((async) {
+        final r = _Rig();
+        r.rx(_historyStart());
+        r.engine.debugStartHistoricalRefresh();
+        async.elapse(Duration.zero);
+        expect(r.drainRequests, isEmpty);
+        r.rx(_historyComplete());
+        async.elapse(const Duration(seconds: 4));
+        expect(r.drainRequests, hasLength(1),
+            reason: 'after the settle, not the full quiet window');
+      });
+    });
+
+    test('a deferred claim keeps waiting while the foreign transfer streams, '
+        'without spinning', () {
+      fakeAsync((async) {
+        final r = _Rig();
+        r.rx(_historyStart());
+        r.engine.debugStartHistoricalRefresh();
+        var c = 1800;
+        final stream = Timer.periodic(const Duration(seconds: 2),
+            (_) => r.rx(_gen5V18Inner(ts: ts, counter: c++)));
+        async.elapse(const Duration(seconds: 45));
+        expect(r.drainRequests, isEmpty);
+        expect(async.pendingTimers.length, lessThan(10));
+        stream.cancel();
+        async.elapse(const Duration(seconds: 21));
         expect(r.drainRequests, hasLength(1));
       });
     });
@@ -1972,10 +2021,8 @@ void main() {
         expect(r.committedRows, [2],
             reason: 'the 5 s quiet flush banked the foreign rows tokenless');
 
-        bool? second;
-        r.engine.debugStartHistoricalRefresh().then((v) => second = v);
-        async.elapse(const Duration(seconds: 1));
-        expect(second, isTrue);
+        // The deferred claim re-requested on its own once the window closed.
+        expect(r.drainRequests, hasLength(1));
         r.rx(_historyStart());
         r.rx(_gen5V18Inner(ts: ts + 2, counter: 1497));
         r.rx(_historyEnd(expected: 1, token: 0xD990));
@@ -2202,13 +2249,14 @@ void main() {
             (_) => r.rx(_historyEnd(expected: 1, token: 0xD720)));
         async.elapse(const Duration(seconds: 30));
         expect(await_(r.engine.debugStartHistoricalRefresh(), async), isFalse);
+        expect(r.drainRequests, isEmpty);
         async.elapse(const Duration(seconds: 31));
         expect(r.engine.offloadSnapshot['foreign_history_live'], isFalse);
-        bool? claimed;
-        r.engine.debugStartHistoricalRefresh().then((v) => claimed = v);
-        async.elapse(const Duration(seconds: 1));
+        async.elapse(const Duration(seconds: 10));
         reoffer.cancel();
-        expect(claimed, isTrue);
+        expect(r.drainRequests, hasLength(1),
+            reason: 'the deferred claim re-requests once the stall bound '
+                'closes the window');
         expect(r.writes.where((w) => w.opcode == Cmd.historicalDataResult),
             isEmpty);
       });
@@ -2341,10 +2389,14 @@ void main() {
         async.elapse(const Duration(seconds: 1));
         expect(injected, isTrue);
         expect(sent, isFalse);
-        async.elapse(const Duration(seconds: 70));
+        async.elapse(const Duration(seconds: 9));
         expect(r.aborts, isEmpty,
             reason: 'nothing of ours was ever requested');
         expect(r.drainRequests, isEmpty);
+        async.elapse(const Duration(seconds: 61));
+        expect(r.drainRequests, isNotEmpty, reason: 're-requested once quiet');
+        expect(r.aborts, hasLength(r.drainRequests.length),
+            reason: 'every abort ends a request that went out');
       });
     });
 

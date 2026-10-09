@@ -679,8 +679,11 @@ Future<void> disconnectHeadless(
   BleEngine engine, {
   Duration bound = const Duration(seconds: 12),
 }) async {
-  await engine.disconnect();
-  await engine.settleShutdownBanks(bound: bound);
+  try {
+    await engine.disconnect();
+  } finally {
+    await engine.settleShutdownBanks(bound: bound);
+  }
 }
 
 /// [allowPermissionPrompt] defaults to `false` because this function's
