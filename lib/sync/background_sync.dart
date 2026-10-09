@@ -135,10 +135,10 @@ BleEngine createHeadlessSyncEngine({
     onState: (_) {},
     // This path drains exactly the one paired band (PairedDevice.load()),
     // so kPrimaryDeviceId is the correct value here, not a placeholder.
-    onEvent: (id, ts, hex) async {
+    onEvent: (id, ts, hex, profile) async {
       if (ResetGate.active) return;
       await LocalDb.insertEvent(id, ts, hex,
-          deviceId: LocalDb.kPrimaryDeviceId);
+          deviceId: LocalDb.kPrimaryDeviceId, profile: profile);
       await handleHeadlessAlarmEvent(id);
     },
     log: (l) => debugPrint('[bgsync] $l'),

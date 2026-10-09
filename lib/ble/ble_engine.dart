@@ -62,7 +62,11 @@ int u32(Uint8List b, int o) =>
 typedef SampleSink = Future<void> Function(Sample? sample, RawRecord raw);
 typedef StateSink = void Function(DeviceState state);
 typedef LogSink = void Function(String line);
-typedef EventSink = void Function(int eventId, int tsEpoch, String hex);
+/// [profile] is the band the event came off. The event-id space is not shared
+/// across generations (109 is BATTERY_PACK_INFO on gen5 only), so whoever
+/// persists the hex has to decode it the way the live parse did.
+typedef EventSink =
+    void Function(int eventId, int tsEpoch, String hex, BandProfile profile);
 typedef BatchSink =
     Future<void> Function(List<RawRecord> raws, List<Sample?> samples);
 
@@ -84,10 +88,11 @@ typedef CommitSyncBatchSink =
       String? deviceFamily,
     });
 
-/// Persist an UNDECODABLE historical record (unknown/unsupported version) to the
-/// durable archive (never pruned). Used only by the pre-setup fallback path; the
-/// drain path archives inside the SAME transaction as the batch commit so the
-/// safe-trim invariant holds (see [CommitSyncBatchSink]).
+/// Persist an UNDECODABLE historical record (unknown/unsupported version) to
+/// the durable archive (kept, except the thinning in
+/// `LocalDb.thinRawArchiveBefore`). Used only by the pre-setup fallback path;
+/// the drain path archives inside the SAME transaction as the batch commit so
+/// the safe-trim invariant holds (see [CommitSyncBatchSink]).
 typedef ArchiveSink = Future<void> Function(ArchiveRecord archive);
 
 // ── WHOOP MG ECG (Labrador) ─────────────────────────────────────────────────
@@ -2199,6 +2204,11 @@ class BleEngine {
   int? _strapAlarmEpoch;
   bool? _strapAlarmActive;
 
+  /// Strap timestamp of the newest battery-pack reading or removal applied to
+  /// [DeviceState.batteryPackPct]. An older one arriving later is the past,
+  /// whatever the freshness gate says.
+  int? _batteryPackEventTs;
+
   /// Why the last running haptics pattern stopped (HAPTICS_TERMINATED(100),
   /// `expired`, `error` or `user_double_tap`. The double tap is the
   /// only way to learn the WEARER dismissed an alarm rather than letting it
@@ -2557,6 +2567,12 @@ class BleEngine {
   void _setPhase(BleConnState p) {
     _phase = p;
     state.connection = connStringFor(p);
+    // Removal is only heard over a live link, so off one the pack reading is
+    // no longer known to be true. The next 109 brings it back.
+    if (p != BleConnState.listening) {
+      state.batteryPackPct = null;
+      _batteryPackEventTs = null;
+    }
     onState(state);
   }
 
@@ -4526,8 +4542,9 @@ class BleEngine {
         // Only while an offload is running: that is the only window where
         // an ACK can make the band delete these bytes, and we cannot tell a
         // record from a 100 Hz live frame under an unknown revision —
-        // archiving those (raw_archive is never pruned) would bloat the DB
-        // exactly the way live frames are kept out of raw_records for.
+        // archiving those (raw_archive is kept, except the thinning in
+        // `LocalDb.thinRawArchiveBefore`) would bloat the DB exactly the
+        // way live frames were kept out of the old raw_records ledger.
         // Another client's transfer counts too: its ACK trims these
         // bytes just the same, so they go to the foreign buffer. Which
         // buffer is the arrival classifier's call, as for every frame.
@@ -5277,13 +5294,11 @@ class BleEngine {
       _log('[EVENT] ${_innerHex(frame.inner)}');
       // The profile matters: protocol keeps the gen5-scoped event bodies
       // (29/100/109/123) numeric and un-decoded on a gen4 link.
-      final e = parseEvent(
-        frame.inner,
-        profile: _session?.band ?? BandProfile.gen4,
-      );
+      final profile = _session?.band ?? BandProfile.gen4;
+      final e = parseEvent(frame.inner, profile: profile);
       if (e != null) {
         _handleEventInfo(e);
-        onEvent?.call(e.eventId, e.tsEpoch, _innerHex(frame.inner));
+        onEvent?.call(e.eventId, e.tsEpoch, _innerHex(frame.inner), profile);
       }
     }
     final entry = _session?.entry ?? kWhoopGen4;
@@ -5502,9 +5517,9 @@ class BleEngine {
   /// (plausibility + frontier via [RecordGate]) → storage enqueue. Keeping one
   /// path is deliberate: the previous duplicate had drifted, silently losing
   /// the plausibility gate and freezing the frontier the stuck-strap /
-  /// auto-continue policies read.
-  /// Set a historical frame aside in `raw_archive` — the never-pruned store for
-  /// bytes this build could not fully turn into a [Sample].
+  /// auto-continue policies read. Set a historical frame aside in `raw_archive`
+  /// — the kept store (except the thinning in `LocalDb.thinRawArchiveBefore`)
+  /// for bytes this build could not fully turn into a [Sample].
   ///
   /// Routed through the drain when one is active so the write lands inside the
   /// SAME transaction as the batch commit (safe-trim invariant: nothing the
@@ -5658,7 +5673,7 @@ class BleEngine {
       // SLP-05 sizes does not exist on real data.
       //
       // Worse, routing it here would be a REGRESSION: `_queueDecodedOneHz`
-      // writes REPLACE on the rec_ts key, so a v25 record arriving for a
+      // writes REPLACE on the second's key, so a v25 record arriving for a
       // second a v24 record already holds would evict it — deleting that
       // second's HR, R-R, optical and thermal readings and leaving an
       // HR-less row behind. That is 49% of v25 records.
@@ -5847,6 +5862,36 @@ class BleEngine {
       final wallNow = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       if (BatteryPolicy.acceptsEventReading(batteryTs, wallNow)) {
         state.batteryPct = (f['battery_pct'] as num).toDouble();
+        onState(state);
+      }
+    }
+    // The battery pack's own charge, relayed by the strap in
+    // BATTERY_PACK_INFO(109) as tenths of a percent, and its removal (22).
+    // Newest event wins: a 109 or 22 older than the last one applied is
+    // ignored, so a late replay cannot bring back a removed pack or clear a
+    // re-attached one. Attach (21) sets nothing: the 109 after it carries the
+    // level.
+    final packTs = (f['ts_epoch'] as num?)?.toInt();
+    final packEventIsNewest = packTs != null &&
+        (_batteryPackEventTs == null || packTs >= _batteryPackEventTs!);
+    if (f.containsKey('pack_battery_raw') && packEventIsNewest) {
+      // Same freshness gate as the strap's level above: a replayed 109 is the
+      // pack's charge hours ago. A raw value past 1000 is not a percentage and
+      // is dropped rather than clamped.
+      final raw = (f['pack_battery_raw'] as num).toInt();
+      final wallNow = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      if (raw <= 1000 && BatteryPolicy.acceptsEventReading(packTs, wallNow)) {
+        _batteryPackEventTs = packTs;
+        state.batteryPackPct = raw / 10.0;
+        onState(state);
+      }
+    }
+    // Removal needs no freshness gate — forgetting a reading never claims
+    // anything — only to be newer than the reading it would clear.
+    if (f['pack_connected'] == false && packEventIsNewest) {
+      _batteryPackEventTs = packTs;
+      if (state.batteryPackPct != null) {
+        state.batteryPackPct = null;
         onState(state);
       }
     }
