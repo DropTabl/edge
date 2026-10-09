@@ -280,11 +280,12 @@ class DayBundleInput {
   final List<double> rhrHistory;
   final List<double> respHistory;
 
-  /// Trailing robust nocturnal RMSSD means (ms) — the SAME `rmssd` series the
-  /// engine writes to metric_series (NREM-restricted, median-of-5-min). Used as
-  /// the history for the EWMA hrv baseline so its center and today's value are the
-  /// SAME metric (was previously reconstructed from ln(whole-window RMSSD), a
-  /// definition mismatch that made the z spuriously large).
+  /// Trailing nightly RMSSD (ms) — the SAME `rmssd` series the engine writes to
+  /// metric_series (the sleep-session mean of 5-min-window RMSSDs; absent when
+  /// that estimator abstains). Used as the history for the EWMA hrv baseline so
+  /// its center and today's value are the SAME metric (was previously
+  /// reconstructed from ln(whole-window RMSSD), a definition mismatch that made
+  /// the z spuriously large).
   final List<double> rmssdHistory;
 
   /// Trailing RAW nightly skin-temp ADC means (NOT z-scores). The personal
@@ -485,6 +486,10 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
   final nn = corrected.nn;
   final nnTimes = corrected.nnTimesMs;
   final artifactFraction = (1.0 - corrected.cleanFraction).clamp(0.0, 1.0);
+  // Σ RR ÷ wall span of the raw sleep RR: above 1.10 the stream holds more
+  // beat-time than elapsed (duplicated or interleaved beats), and every RMSSD
+  // below refuses it. Null under 10 min of span.
+  final rrCov = rrCoverage(d.sleepRrMs, d.sleepRrTsMs);
 
   final hasSleep = (d.sleepJson['tst_sec']) != null;
 
@@ -515,20 +520,21 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
   // Whole-window time-domain HRV is kept for SDNN / detail rows only. The
   // nightly headline HRV is the mean of 5-min cleaned-window RMSSDs across the
   // detected sleep session, not one RMSSD over the whole night's NN stream.
-  final hrvT = hrvTime(nn, nnTimesMs: nnTimes);
+  final hrvT = hrvTime(nn, nnTimesMs: nnTimes, coverage: rrCov);
   // Keep the robust estimator as a secondary detail only; the canonical nightly
   // RMSSD follows the sleep-session windowed formulation.
   final nremMask = _nremMaskAlignedToNn(d, nnTimes, d.sleepRrTsMs);
-  final robustRmssd = nocturnalRmssd(nn, nnTimes, stageMaskPerSec: nremMask);
-  final sleepSessionRmssdMetric = sleepSessionWindowedRmssd(
+  final robustRmssd = nocturnalRmssd(nn, nnTimes,
+      stageMaskPerSec: nremMask, coverage: rrCov);
+  final sleepSessionRmssdMetric = sleepSessionRmssdDetail(
     d.sleepRrMs,
     d.sleepRrTsMs,
     startSec: d.sleepOnsetSec,
     endSec: d.sleepOffsetSec,
   );
-  final sleepSessionRmssd = sleepSessionRmssdMetric.present
-      ? sleepSessionRmssdMetric.value
-      : null;
+  final sessionDetail = sleepSessionRmssdMetric.value;
+  final sleepSessionRmssd =
+      sleepSessionRmssdMetric.present ? sessionDetail!.rmssd : null;
   final hrvF = nn.length >= 20
       ? hrvFreq(nn, nnTimes, artifactFraction: artifactFraction)
       : Metric<HrvFreq>.absent(
@@ -982,7 +988,10 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
   final hrvOriginMs = (d.sleepRrTsMs.isEmpty || d.sleepRrMs.isEmpty)
       ? null
       : d.sleepRrTsMs.first - d.sleepRrMs.first;
-  final hrvTimeline = _hrvTimeline(nn, nnTimes, hrvOriginMs);
+  // A rolling RMSSD of the same beats: none on an over-counted stream.
+  final hrvTimeline = rrCov?.overCounted == true
+      ? const <Map<String, num>>[]
+      : _hrvTimeline(nn, nnTimes, hrvOriginMs);
   // CV-06 — the SHAPE of the night: per-bin RMSSD over the same cleaned NN the
   // headline uses, so the curve and the number can never disagree. Bins that
   // fall under the beat floor stay in the series as HOLES on purpose — dropping
@@ -996,7 +1005,9 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
   // `startSec` is seconds from the FIRST BEAT, not an epoch — `origin_ms` is
   // the wall-clock instant that clock starts at, the same `hrvOriginMs` the
   // timeline above is placed on.
-  final nightShape = nightHrvShape(nn, nnTimes);
+  // Every bin is an RMSSD of the same beats: absent with them on an
+  // over-counted stream.
+  final nightShape = nightHrvShape(nn, nnTimes, coverage: rrCov);
   final strainCurve = _strainCurve(
     wakeHr,
     restingHr: rhrForTrimp,
@@ -1064,6 +1075,20 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
       'tier': Tier.high,
       'inputs_used': const ['rr_sleep_window'],
       'note': sleepSessionRmssdMetric.note,
+      // Diagnostics of the same estimate; null when it is absent (the
+      // whole-night `hrv_time` envelope still carries diff_acf1).
+      'windows': sessionDetail?.windows,
+      'diff_acf1': sessionDetail?.diffAcf1 == null
+          ? null
+          : _round(sessionDetail!.diffAcf1!, 4),
+      'rr_coverage': sessionDetail?.rrCoverage == null
+          ? null
+          : _round(sessionDetail!.rrCoverage!, 4),
+      'overcounted_windows': sessionDetail?.overCountedWindows,
+      // Windows under the floor of clean successive differences, and that
+      // floor: how much of the night the mean does NOT rest on.
+      'thin_windows': sessionDetail?.thinWindows,
+      'min_diffs_per_window': sessionDetail?.minDiffsPerWindow,
     },
     'rmssd_nocturnal': robustRmssd.toJson(),
     'hrv_freq': hrvF.toJson((v) => v.toJson()),
@@ -1181,16 +1206,14 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
   };
 
   // Indexed scalars (also surfaced to metric_series by the engine).
-  // HEADLINE RMSSD = mean of 5-min cleaned-window RMSSDs across the detected
-  // sleep session. Fall back to the robust estimator, then the whole-window
-  // RMSSD only when the canonical sleep-session value is absent.
-  final rmssdScalar =
-      sleepSessionRmssd ??
-      (robustRmssd.present
-          ? robustRmssd.value
-          : ((hrvT.present && hrvT.value!.rmssd != null)
-                ? hrvT.value!.rmssd
-                : null));
+  // ONE ESTIMATOR. `rmssd` is the sleep-session mean of 5-min-window RMSSDs —
+  // the same number `ln_rmssd` (→ readiness) is the log of — or it is absent.
+  // The NREM median (`clinical.rmssd_nocturnal`) and the whole-night RMSSD
+  // (`scalars.rmssd_whole`, `clinical.hrv_time`) stay published under their
+  // own keys; they are different statistics over differently-cleaned beats and
+  // never stand in for this one (AGENTS §3.3). The fallback used to keep the
+  // chart unbroken by mixing three estimators into one series.
+  final rmssdScalar = sleepSessionRmssd;
   // Whole-window RMSSD kept available as a secondary detail (NOT the headline).
   final rmssdWholeScalar = (hrvT.present && hrvT.value!.rmssd != null)
       ? hrvT.value!.rmssd
@@ -1503,6 +1526,8 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
       'nn_clean': nn.length,
       'clean_fraction': _round(corrected.cleanFraction, 4),
       'sleep_seconds': inBedSec ?? 0,
+      'rr_coverage': rrCov == null ? null : _round(rrCov.coverage, 4),
+      'rr_duplicate_beats': rrCov?.duplicateBeats,
     },
     'readiness_absent_diag': ?readinessAbsentDiag,
     'scalars': {
@@ -1516,7 +1541,8 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
       // every stored bundle.
       'rhr': rhrToday,
       'rhr_nocturnal': rhrToday,
-      // Headline RMSSD (robust nocturnal, NREM). Whole-window kept separately.
+      // Headline RMSSD (sleep-session mean of 5-min windows; no fallback).
+      // Whole-night RMSSD kept separately.
       'rmssd': rmssdScalar,
       'rmssd_whole': rmssdWholeScalar,
       'readiness': readinessScalar,

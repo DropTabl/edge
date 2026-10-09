@@ -4693,6 +4693,14 @@
   "@investigateRmssd": {
     "description": "HRV metric label: RMSSD (kept as scientific abbreviation)"
   },
+  "investigateRmssdNightly": "RMSSD, nightly (mean of 5-min windows)",
+  "@investigateRmssdNightly": {
+    "description": "HRV metric label: the nightly headline RMSSD, the mean of the RMSSDs of the sleep session's 5-minute windows (RMSSD kept as scientific abbreviation)"
+  },
+  "investigateRmssdStored": "RMSSD, nightly (earlier estimate)",
+  "@investigateRmssdStored": {
+    "description": "HRV metric label: a nightly RMSSD stored by an earlier version of the app, computed by a method other than the 5-minute-window mean (RMSSD kept as scientific abbreviation)"
+  },
   "investigateSdnn": "SDNN",
   "@investigateSdnn": {
     "description": "HRV metric label: SDNN (kept as scientific abbreviation)"
@@ -6779,7 +6787,7 @@
   "@healthBlurbRestingHr": {
     "description": "Explore catalogue one-line description for resting heart rate"
   },
-  "healthBlurbHrv": "RMSSD over the cleanest window of sleep",
+  "healthBlurbHrv": "Mean RMSSD of 5-min windows across sleep",
   "@healthBlurbHrv": {
     "description": "Explore catalogue one-line description for HRV"
   },
