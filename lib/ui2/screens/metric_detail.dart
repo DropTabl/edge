@@ -115,13 +115,15 @@ const _specs = <String, MetricSpec>{
     unit: 'ms',
     color: C.green,
     icon: LucideIcons.activity,
-    method: 'The mean RMSSD of the sleep session\'s five-minute windows. Beat '
-        'timing is recovered from the band\'s 1 Hz records; each window keeps '
-        'only beats that pass an artefact filter, and a window with too few '
-        'clean beat-to-beat differences is left out. No value is shown when '
-        'no window qualifies or the beat stream holds duplicated beats. '
+    method: 'The mean of RMSSD across every 5-minute window of the detected '
+        'sleep session that holds at least 20 clean successive differences. '
+        'Beats outside 300–2000 ms, and beats more than 20% from their local '
+        'median, are dropped first. On a night whose beat timing looks noisy, '
+        'only windows that pass the jitter check on their own, or that sit on '
+        'a steady breathing line, count; a window, or a night, whose beats '
+        'add up to more time than passed is left out. '
         'Pulse-derived, so this is PRV: real and trendable, but not ECG HRV.',
-    citation: 'Task Force 1996',
+    citation: 'Task Force 1996 · 20% local-median ectopic filter, after Malik',
     requires: {InputSignal.rrIntervals},
   ),
   'readiness': MetricSpec(
@@ -307,8 +309,12 @@ const _specs = <String, MetricSpec>{
     color: C.green,
     icon: LucideIcons.activity,
     higherBetter: false,
-    method: 'Night-to-night coefficient of variation of RMSSD.',
-    citation: 'Within-user dispersion',
+    method: 'Within one night: the standard deviation of the night\'s beat '
+        'intervals after artifact correction (SDNN) as a percentage of their '
+        'mean. The chart shows how that per-night figure moves across nights; '
+        'it is not a night-to-night coefficient of variation.',
+    citation: 'SDNN (Task Force 1996) over Lipponen & Tarvainen 2019 corrected '
+        'beats, normalised by mean NN',
     requires: {InputSignal.rrIntervals},
   ),
   'brv': MetricSpec(

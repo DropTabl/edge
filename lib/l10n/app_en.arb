@@ -6787,13 +6787,13 @@
   "@healthBlurbRestingHr": {
     "description": "Explore catalogue one-line description for resting heart rate"
   },
-  "healthBlurbHrv": "Mean RMSSD of 5-min windows across sleep",
+  "healthBlurbHrv": "Mean RMSSD across the night's 5-minute windows",
   "@healthBlurbHrv": {
-    "description": "Explore catalogue one-line description for HRV"
+    "description": "Explore catalogue one-line description for HRV: the nightly mean of the RMSSDs of the sleep session's 5-minute windows"
   },
-  "healthBlurbHrvCv": "How much that swings from night to night",
+  "healthBlurbHrvCv": "SDNN as a share of the average beat interval, within one night",
   "@healthBlurbHrvCv": {
-    "description": "Explore catalogue one-line description for HRV night-to-night variability"
+    "description": "Explore catalogue one-line description for HRV stability: within-night SDNN as a percentage of the mean beat interval (not a night-to-night variability)"
   },
   "healthBlurbLfHf": "Where beat-timing power sits across frequencies",
   "@healthBlurbLfHf": {
