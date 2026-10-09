@@ -165,6 +165,19 @@
   "devicesNotConnected": "No conectado",
   "devicesTierRank": "Nivel {rank}",
   "devicesTierRankLabel": "Nivel {rank} · {label}",
+  "devicesOuraKeyRefused": "El anillo rechazó la clave. Vuelve a emparejarlo para instalar una clave que acepte.",
+  "@devicesOuraKeyRefused": {
+    "description": "Aviso: la sincronización de Oura falló — el anillo rechazó la clave de emparejamiento."
+  },
+  "devicesOuraStorageFailed": "La sincronización no se pudo guardar por completo. Vuelve a sincronizar.",
+  "@devicesOuraStorageFailed": {
+    "description": "Aviso: la sincronización de Oura falló — falló el commit de almacenamiento."
+  },
+  "devicesOuraProtocolTimeout": "El anillo dejó de responder a mitad de la sincronización. Vuelve a sincronizar.",
+  "@devicesOuraProtocolTimeout": {
+    "description": "Aviso: la sincronización de Oura falló — tiempo de espera agotado / respuesta incompleta."
+  },
+  "devicesOuraCheckpointUnconfirmed": "No se pudo completar la sincronización. Vuelve a sincronizar.",
   "devicesSyncingTheRing": "Sincronizando el anillo…",
   "devicesSynced": "Sincronizado.",
   "devicesCouldNotReachRing": "No se pudo contactar con el anillo. Debe estar cerca y no conectado a otra app.",

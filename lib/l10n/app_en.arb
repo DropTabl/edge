@@ -768,6 +768,22 @@
       }
     }
   },
+  "devicesOuraKeyRefused": "The ring rejected the key. Re-pair it to install a key it accepts.",
+  "@devicesOuraKeyRefused": {
+    "description": "Snackbar: Oura sync failed — the ring explicitly refused the pairing key."
+  },
+  "devicesOuraStorageFailed": "The sync could not be saved completely. Please try syncing again.",
+  "@devicesOuraStorageFailed": {
+    "description": "Snackbar: Oura sync failed — the durable storage commit failed."
+  },
+  "devicesOuraProtocolTimeout": "The ring stopped answering mid-sync. Please try syncing again.",
+  "@devicesOuraProtocolTimeout": {
+    "description": "Snackbar: Oura sync failed — protocol timeout / incomplete answer."
+  },
+  "devicesOuraCheckpointUnconfirmed": "The sync could not be completed. Please try syncing again.",
+  "@devicesOuraCheckpointUnconfirmed": {
+    "description": "Snackbar: Oura sync failed — a batch checkpoint was not confirmed in time."
+  },
   "devicesSyncingTheRing": "Syncing the ring…",
   "@devicesSyncingTheRing": {
     "description": "Snackbar: syncing ring."

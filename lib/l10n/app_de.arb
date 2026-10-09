@@ -171,6 +171,19 @@
   "devicesNotConnected": "Nicht verbunden",
   "devicesTierRank": "Stufe {rank}",
   "devicesTierRankLabel": "Stufe {rank} · {label}",
+  "devicesOuraKeyRefused": "Der Ring hat den Schlüssel abgelehnt. Kopple ihn neu, um einen akzeptierten Schlüssel zu installieren.",
+  "@devicesOuraKeyRefused": {
+    "description": "Snackbar: Oura-Sync fehlgeschlagen — der Ring hat den Kopplungsschlüssel ausdrücklich abgelehnt."
+  },
+  "devicesOuraStorageFailed": "Die Synchronisation konnte nicht vollständig gespeichert werden. Bitte synchronisiere erneut.",
+  "@devicesOuraStorageFailed": {
+    "description": "Snackbar: Oura-Sync fehlgeschlagen — der dauerhafte Speicher-Commit ist fehlgeschlagen."
+  },
+  "devicesOuraProtocolTimeout": "Der Ring hat mitten im Sync aufgehört zu antworten. Bitte synchronisiere erneut.",
+  "@devicesOuraProtocolTimeout": {
+    "description": "Snackbar: Oura-Sync fehlgeschlagen — Protokoll-Timeout / unvollständige Antwort."
+  },
+  "devicesOuraCheckpointUnconfirmed": "Die Synchronisation konnte nicht abgeschlossen werden. Bitte synchronisiere erneut.",
   "devicesSyncingTheRing": "Ring wird synchronisiert…",
   "devicesSynced": "Synchronisiert.",
   "devicesCouldNotReachRing": "Der Ring konnte nicht erreicht werden. Er muss in der Nähe sein und darf nicht mit einer anderen App verbunden sein.",
