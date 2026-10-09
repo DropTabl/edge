@@ -294,6 +294,12 @@ class DayBundleInput {
   /// matches today's raw mean (the old z-vs-z series was a unit mismatch bug).
   final List<double> skinTempAdcHistory;
 
+  /// Trailing per-day quiet-waking levels (`quiet_hrr`, %HRR fraction),
+  /// strictly before this day, oldest→newest. Strain is priced against their
+  /// median ([personalQuietWakingHrr]) — never against this day's own level,
+  /// which would subtract the day's own living from itself.
+  final List<double> quietHrrHistory;
+
   /// TS-03 — the highest heart rate the band has OBSERVED (held >=15 s with
   /// corroborating motion, `observed_max_hr.dart`) on any day STRICTLY BEFORE
   /// this one, or null when there is none. Not a physiological HRmax: if the
@@ -351,6 +357,7 @@ class DayBundleInput {
     this.respHistory = const [],
     this.rmssdHistory = const [],
     this.skinTempAdcHistory = const [],
+    this.quietHrrHistory = const [],
     this.observedHrCeilingBpm,
     this.dayConfidence = 0,
     this.dayFlags = const [],
@@ -382,6 +389,7 @@ class DayBundleInput {
     'resp_history': respHistory,
     'rmssd_history': rmssdHistory,
     'skin_temp_adc_history': skinTempAdcHistory,
+    'quiet_hrr_history': quietHrrHistory,
     'observed_hr_ceiling_bpm': observedHrCeilingBpm,
     'day_confidence': dayConfidence,
     'day_flags': dayFlags,
@@ -432,6 +440,7 @@ class DayBundleInput {
       respHistory: dbls('resp_history'),
       rmssdHistory: dbls('rmssd_history'),
       skinTempAdcHistory: dbls('skin_temp_adc_history'),
+      quietHrrHistory: dbls('quiet_hrr_history'),
       observedHrCeilingBpm: (m['observed_hr_ceiling_bpm'] as num?)?.toDouble(),
       dayConfidence: (m['day_confidence'] as num?)?.toDouble() ?? 0,
       dayFlags: strs('day_flags'),
@@ -829,6 +838,11 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
   // TRIMP, HR zones, and calories so all three see the same wake series).
   final wakeHr = _perMinuteWakeSeries(d);
   final perMin = [for (final p in wakeHr) p.hr];
+  // THIS user's quiet-waking level: the median of the trailing days' own
+  // levels, strictly before today. Absent below three days — strain then
+  // abstains with the baseline grammar rather than pricing being awake at a
+  // population constant.
+  final quiet = personalQuietWakingHrr(d.quietHrrHistory);
   // ── WHY the activity family is absent, named AT THE GATE THAT CAUSED IT ────
   //
   // These four figures — strain/TRIMP, the zone minutes, the ceiling they were
@@ -863,6 +877,8 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
       ? needInputNote('resting_hr')
       : sex == null
       ? needInputNote('sex')
+      : !quiet.present
+      ? (quiet.note ?? kUnknownAbsenceNote)
       : null;
   final caloriesAbsentNote = perMin.isEmpty
       ? needInputNote('wake_hr')
@@ -956,26 +972,25 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
     }
   }
 
-  // HEADLINE STRAIN = 0–21 map of the TRIMP earned ABOVE the quiet-waking
-  // baseline; raw TRIMP kept as a detail. `perMin` is the wake window the TRIMP
-  // was accumulated over, so it sets the baseline that gets subtracted.
-  final rawTrimp = trimp.present ? trimp.value : null;
-  final strainMetric = strainScoreMetric(
-    rawTrimp,
-    wakeMinutes: perMin.isEmpty ? null : perMin.length.toDouble(),
-    // THE REFERENCE LEVEL, NOT THIS USER'S (edge#226 is still open). analytics
-    // stopped defaulting the quiet-waking level so every caller has to state
-    // which one it means; `quietWakingHrr` is the constant the anchor table was
-    // generated at, so passing it reproduces the strain this app ships today
-    // and nobody's number moves on this commit. The real level is
-    // `dailyQuietWakingHrr` fed through a rolling personal median — a trait,
-    // not a day, and the workout scorers need the same one the day uses or a
-    // bout subtracts its own effort away. That plumbing is edge#226.
-    // ponytail: population constant, swap for the rolling personal median when
-    // edge#226 lands — see the same comment at the other four call sites.
-    quietHrr: quietWakingHrr,
-    female: workoutSex(sex) == 'female',
-  );
+  // HEADLINE STRAIN = 0–21 map of the TRIMP earned ABOVE this user's
+  // quiet-waking level, exercise minutes (≥ 40 % HRR) never offset by quiet
+  // ones; raw TRIMP kept as a detail. Same analytics arithmetic as the curve
+  // below and the engine's recompute, so the three cannot disagree.
+  final sexEnum = workoutSex(sex) == 'female' ? Sex.female : Sex.male;
+  final strainMetric = strainAbsentNote != null || !quiet.present
+      ? Metric<double>.absent(
+          tier: Tier.estimate,
+          inputs_used: const ['hr_1hz', 'profile', 'quiet_waking_hrr_history'],
+          note: strainAbsentNote ?? kUnknownAbsenceNote,
+        )
+      : strainScoreFromSeries(
+          perMin,
+          restingHr: rhrForTrimp,
+          maxHr: hrMax,
+          quietHrr: quiet.value!.hrr,
+          sex: sexEnum,
+          quietSettled: quiet.value!.settled,
+        );
 
   // ── curve series for the UI ────────────────────────────────────────────────
   final hrCurve = _downsampleHr(d.dayTsSec, d.dayHr);
@@ -1013,6 +1028,7 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
     restingHr: rhrForTrimp,
     maxHr: hrMax,
     sex: sex,
+    quietHrr: quiet.value?.hrr,
   );
   final zoneTimeline = zoneSet == null
       ? const <Map<String, num>>[]
@@ -1828,50 +1844,25 @@ List<Map<String, num>> _strainCurve(
   required double? restingHr,
   required double? maxHr,
   required String? sex,
+  required double? quietHrr,
 }) {
-  if (wakeHr.isEmpty ||
-      restingHr == null ||
-      maxHr == null ||
-      maxHr <= restingHr ||
-      sex == null) {
-    return const [];
-  }
-  // Banister's sex constants, via the ONE shared weighting factor. This used to
-  // inline `exp(b·hrr)` and drop the 0.64/0.86 scale coefficient entirely, so
-  // the curve accumulated a TRIMP 1.5625× the day's own — the curve and the
-  // headline were never on the same scale. It matters more now: the headline
-  // subtracts a baseline priced with `banisterY`, so a curve accumulating
-  // without it would be netted against an allowance from a different formula.
-  final female = workoutSex(sex) == 'female';
-  final reserve = maxHr - restingHr;
-  var trimp = 0.0;
-  var wakeMin = 0.0;
-  final out = <Map<String, num>>[];
-  for (final p in wakeHr) {
-    var hrr = (p.hr - restingHr) / reserve;
-    if (hrr < 0) hrr = 0;
-    if (hrr > 1) hrr = 1;
-    trimp += hrr * StrainScorer.banisterY(hrr, female: female);
-    // The baseline grows with the wake window ALREADY elapsed, so the curve
-    // stays flat through quiet waking and climbs only on real effort — rather
-    // than charging a whole day's allowance against the first minute.
-    wakeMin += 1;
-    out.add({
-      't': p.tsSec,
-      'v': _round(
-        strainScore(
-          trimp,
-          wakeMinutes: wakeMin,
-          // Reference level, not this user's — see onehz_pipeline's
-          // `strainMetric` for why, and edge#226 for the fix.
-          quietHrr: quietWakingHrr,
-          female: female,
-        ),
-        2,
-      ),
-    });
-  }
-  return out;
+  if (wakeHr.isEmpty || sex == null) return const [];
+  // The headline's own arithmetic, minute by minute (`strainCurveFromSeries`),
+  // so the last point IS the headline and exercise already banked never falls
+  // back out through a quiet afternoon. Null — no level, or bad anchors —
+  // leaves the curve empty, which the strain screen explains from the note.
+  final curve = strainCurveFromSeries(
+    [for (final p in wakeHr) p.hr],
+    restingHr: restingHr,
+    maxHr: maxHr,
+    quietHrr: quietHrr,
+    sex: workoutSex(sex) == 'female' ? Sex.female : Sex.male,
+  );
+  if (curve == null) return const [];
+  return [
+    for (var i = 0; i < wakeHr.length; i++)
+      {'t': wakeHr[i].tsSec, 'v': _round(curve[i], 2)},
+  ];
 }
 
 double? _mean(List<double> xs) {

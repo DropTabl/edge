@@ -24,6 +24,7 @@ import '../compute/hr_max.dart';
 import '../compute/manual_session.dart';
 import '../compute/onehz_pipeline.dart' show kUnknownAbsenceNote, needInputNote;
 import '../compute/profile.dart';
+import '../compute/quiet_level.dart';
 import 'package:openstrap_protocol/openstrap_protocol.dart' as proto;
 import 'package:openstrap_analytics/onehz.dart' as ana;
 
@@ -2911,6 +2912,8 @@ class LocalRepositoryImpl extends LocalRepository {
     // row, every import, every raw replay) — is a refusal, not gen4 by default.
     final deviceFamily = (existing?['device_family'] as String?) ??
         await _windowDeviceFamily(startTs, endTs);
+    final quiet = await personalQuietLevelBefore(
+        dayLabelOf(DateTime.fromMillisecondsSinceEpoch(startTs * 1000)));
 
     final stats = computeManualSessionStats(
       hrTs: hrTs,
@@ -2923,6 +2926,10 @@ class LocalRepositoryImpl extends LocalRepository {
       // calorie anchor; the two are named separately because they can now be
       // different ceilings.
       zoneSet: _zoneSetFor(deviceFamily, await _zoneAnchors()),
+      // The quiet level of the session's OWN local day (its start), so the
+      // bout is priced on the baseline that day's strain was.
+      quietHrr: quiet.value?.hrr,
+      quietSettled: quiet.value?.settled ?? true,
     );
 
     final row = buildManualSessionRow(
@@ -3031,6 +3038,9 @@ class LocalRepositoryImpl extends LocalRepository {
           _profileMaxHr(row['device_family'] as String?)?.toDouble();
       final restingHrForSession =
           await _recentRestingHr() ?? profile.restingHrManual?.toDouble();
+      // Same rule as the save path: the session's own local day's level.
+      final quiet = await personalQuietLevelBefore(
+          dayLabelOf(DateTime.fromMillisecondsSinceEpoch(startTs * 1000)));
       final stats = computeManualSessionStats(
         hrTs: [for (final e in hrRows) (e['rec_ts'] as num).toInt()],
         hrBpm: hrBpm,
@@ -3039,6 +3049,8 @@ class LocalRepositoryImpl extends LocalRepository {
         restingHr: restingHrForSession,
         zoneSet: _zoneSetFor(
             row['device_family'] as String?, await _zoneAnchors()),
+        quietHrr: quiet.value?.hrr,
+        quietSettled: quiet.value?.settled ?? true,
       );
       // The peak is smoothed inside `computeManualSessionStats` now — one
       // definition for the manual save, this re-score and the workout list

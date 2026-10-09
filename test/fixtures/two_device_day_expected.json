@@ -173,9 +173,9 @@
         "confidence": 0.0,
         "tier": "ESTIMATE",
         "inputs_used": [
-          "trimp",
-          "wake_minutes",
-          "quiet_waking_hrr"
+          "hr_1hz",
+          "profile",
+          "quiet_waking_hrr_history"
         ],
         "note": "need_input:name=wake_hr"
       },
