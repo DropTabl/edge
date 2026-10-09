@@ -5380,11 +5380,22 @@ class DerivationEngine {
         carried = true;
         continue;
       }
+      // Both maps come out of the pipeline as map LITERALS, so their inferred
+      // value types are narrow — `series` holds curves, `scalars` doubles —
+      // and what [prev] carries was read back from JSON: a curve is a
+      // `List<dynamic>`, a whole-number scalar an `int`. Writing either into
+      // the typed map threw, and the whole re-derive failed instead of
+      // recovering. Merge into a plain dynamic-valued copy instead, the same
+      // reason the coverage block copies `series`. (The only caller re-reads
+      // `next['scalars']` after this, so replacing the map is safe — and it is
+      // only replaced when something was actually carried into it.)
+      Map<String, dynamic>? merged;
       for (final e in p.entries) {
         if (n.containsKey(e.key) || e.value == null) continue;
-        n[e.key] = e.value;
+        (merged ??= Map<String, dynamic>.from(n))[e.key] = e.value;
         carried = true;
       }
+      if (merged != null) next[sub] = merged;
     }
     return carried;
   }
