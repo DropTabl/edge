@@ -265,7 +265,7 @@ dependencies:
       ref: 89080bcfac7767b3a871fd3a7d9307f5f30dad26
   openstrap_analytics:
     git:
-      url: https://github.com/OpenStrap/analytics.git
+      url: https://github.com/DropTabl/analytics.git
       # analytics main @ #34 merge. Two hops in one: #32 (the HR-onset bypass
       # for low-limb-swing cardio) had already merged and this pin was still
       # sitting on its PR-branch head, and #34 lands the sleep-stager rewrite.
@@ -512,7 +512,9 @@ dependencies:
       # analytics main @ 77fe373, the #95 merge (tree-identical to its head
       # 608c46f): readiness autonomic merge + spread calibration + capped
       # re-centring + robust lnRMSSD centre, for kAlgoVersion 112.
-      ref: 77fe373eb819fda235f80610e898a4bc20a7a249
+      # Preserve interrupted main sleep with the detector's
+      # 90-minute continuation limit; awake/unobserved gaps stay excluded.
+      ref: 74165e45254203c5784ad88a53d8ec6ab099d6dd
 
   # BLE — flutter_blue_plus is the maintained cross-platform GATT client.
   flutter_blue_plus: ^1.36.8
