@@ -28,7 +28,7 @@ NapEdit nap(int start, int end, {String source = 'legacy'}) => NapEdit(
 void main() {
   test('a legacy continuation is not also credited as a nap', () {
     final day = bundle();
-    final edit = nap(6 * 3600, 8 * 3600 + 30);
+    final edit = nap(6 * 3600, 8 * 3600);
     composeAcceptedNaps(day, [edit]);
 
     expect(day['naps']['value'], isEmpty);
@@ -47,6 +47,27 @@ void main() {
     expect(withoutMain['scalars']['nap_min'], 120);
   });
 
+  for (final bounds in [
+    (-3600, 3600),
+    (7 * 3600, 9 * 3600),
+    (-3600, 9 * 3600),
+  ]) {
+    test(
+      'a partially overlapping legacy nap keeps its recorded duration: $bounds',
+      () {
+        final day = bundle();
+        final edit = nap(bounds.$1, bounds.$2);
+        composeAcceptedNaps(day, [edit]);
+        expect(day['naps']['value'], hasLength(1));
+        expect(day['scalars']['nap_min'], 120);
+        expect(day['sleep_periods']['total_asleep_min'], 480);
+        composeAcceptedNaps(day, [edit]);
+        expect(day['scalars']['nap_min'], 120);
+        expect(day['sleep_periods']['total_asleep_min'], 480);
+      },
+    );
+  }
+
   test('legacy naps adjoining the main window stay separate', () {
     final day = bundle();
     composeAcceptedNaps(day, [nap(-7200, 0), nap(8 * 3600, 10 * 3600)]);
@@ -62,7 +83,9 @@ void main() {
   ]) {
     test('invalid main window preserves the legacy nap: $window', () {
       final day = bundle();
-      day['sleep'] = {'window': {'value': window}};
+      day['sleep'] = {
+        'window': {'value': window},
+      };
       composeAcceptedNaps(day, [nap(6 * 3600, 8 * 3600)]);
       expect(day['naps']['value'], hasLength(1));
     });

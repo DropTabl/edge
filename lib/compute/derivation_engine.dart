@@ -1815,7 +1815,9 @@ import 'vendor_sleep.dart';
 // second sleep blocks after hour-long awakenings; gaps stay wake/unobserved.
 // Legacy nap snapshots overlapping the corrected main window no longer add
 // the same sleep twice. Explicit nap confirmations and restorations survive.
-const int kAlgoVersion = 114;
+// 114 → 115: cap grouped sleep at 16 hours and preserve legacy naps that
+// only partially overlap the main window; only full containment is absorbed.
+const int kAlgoVersion = 115;
 /// The sibling SHAs this version was derived against, asserted against
 /// pubspec.yaml in test/db_serve_version_and_reads_test.dart.
 ///
@@ -2001,7 +2003,7 @@ const int kAlgoVersion = 114;
 // REPIN @ 77fe373: analytics main, #95 merge (readiness autonomic
 // merge + spread calibration + capped re-centring + robust lnRMSSD
 // centre), for v112.
-const String kAnalyticsPin = '74165e45254203c5784ad88a53d8ec6ab099d6dd';
+const String kAnalyticsPin = '302332bbe74d82b9bd10d08f93f8a058a3108123';
 // Repinned to analytics main's tip, which carries BOTH PR #72 (hrv_freq
 // Welch gap guard) and PR #73 (overreachingConjunction rhr quantum guard) —
 // the two independent kAlgoVersion bumps above (93 and 94). Verified both

@@ -17,15 +17,17 @@ void composeAcceptedNaps(Map<String, dynamic> bundle, List<NapEdit> edits) {
       offset.isFinite &&
       offset > onset;
   // A corrected main window can absorb an older detector's nap snapshot.
-  // Suppress that legacy overlap in every total, retaining the stored entry
-  // for a later window correction. Manual/confirmed decisions still win.
+  // Suppress only fully contained snapshots, retaining the stored entry for
+  // a later correction. Partial overlaps keep their recorded duration: the
+  // snapshot has no stages to apportion sleep inside/outside the main window.
+  // Manual/confirmed decisions still win.
   final accepted = applyNapEdits(const [], edits)
       .where(
         (nap) =>
             nap['source'] != 'legacy' ||
             !hasMainWindow ||
-            (nap['end'] as num) * 1000 <= onset ||
-            (nap['start'] as num) * 1000 >= offset,
+            (nap['start'] as num) * 1000 < onset ||
+            (nap['end'] as num) * 1000 > offset,
       )
       .toList();
   // Whether the detector judged the day, persisted so a later compose cannot

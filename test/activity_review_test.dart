@@ -516,6 +516,27 @@ void main() {
     await check();
   });
 
+  test('a partially overlapping captured nap survives persistence and review', () async {
+    await db.update('activity_review_meta', {'activated_at': now});
+    await dayResult(version: kAlgoVersion - 1, naps: [nap()], source: null);
+    await dayResult(mainWindow: {
+      'onset_ms': (start - 6 * 3600) * 1000,
+      'offset_ms': (start + 900) * 1000,
+    });
+    Future<void> check() async {
+      final saved = jsonDecode((await LocalDb.dayResult(day))!['payload_json'] as String);
+      expect(saved['naps']['value'], hasLength(1));
+      expect(saved['scalars']['nap_min'], 24);
+      expect(saved['sleep_periods']['total_asleep_min'], 444);
+      expect((await LocalDb.metricSeries('nap_min')).single['value'], 24);
+      expect((await LocalDb.napEdits(day)).single['source'], 'legacy');
+    }
+    await check();
+    await ActivityStore.markDayChanged(db, day);
+    await LocalDb.applyPendingActivityReviews();
+    await check();
+  });
+
   test('putting a legacy nap back records an explicit confirmation', () async {
     await db.update('activity_review_meta', {'activated_at': now});
     await dayResult(version: kAlgoVersion - 1, naps: [nap()], source: null);
