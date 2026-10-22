@@ -11,7 +11,8 @@
 //   SOAK_HISTORY       history lengths, in days, to time loads at
 //                      (30,180,365,730)
 //   SOAK_BUDGET_MB     steady-state growth budget, MB per day (3)
-//   SOAK_MAX_RATIO     slowest-history / shortest-history load time (2)
+//   SOAK_MAX_RATIO     longest-history / shortest-history load time, per
+//                      load, plus 25 ms of absolute slack (2)
 //
 // WHAT IS REAL AND WHAT IS NOT.
 //   * Every simulated day goes through `LocalDb.commitSyncBatch` — the same
@@ -124,6 +125,13 @@ void main() {
   // The last simulated day ends yesterday 22:00, so "today" in the app's sense
   // is the morning after the newest synced night.
   final first = DateTime(today.year, today.month, today.day - liveDays);
+  final history =
+      (_env['SOAK_HISTORY'] ?? '30,180,365,730')
+          .split(',')
+          .map(int.parse)
+          .toSet()
+          .toList()
+        ..sort();
   final snaps = <_Snap>[];
   late String template;
   late String path;
@@ -262,11 +270,26 @@ void main() {
 
   setUpAll(() async {
     if (!enabled) return;
+    // Checked here, not after the hours-long growth run. A single length
+    // compares a history with itself, and live days beyond the shortest
+    // length would give it more history than its label says.
+    expect(
+      history.length,
+      greaterThanOrEqualTo(2),
+      reason: 'SOAK_HISTORY needs two or more distinct lengths',
+    );
+    expect(
+      history.first,
+      greaterThanOrEqualTo(liveDays),
+      reason: 'SOAK_HISTORY lengths must be at least SOAK_DAYS',
+    );
     await deriveDbSetUp(_dbName);
     path = p.join(await databaseFactory.getDatabasesPath(), _dbName);
     // The template: one fully-synced night, derived for real.
     await ingest(SyntheticDay(first, seed: 1));
-    await ingest(SyntheticDay(first.add(const Duration(days: 1)), seed: 2));
+    await ingest(
+      SyntheticDay(DateTime(first.year, first.month, first.day + 1), seed: 2),
+    );
     template = dayLabelOf(first);
     await DerivationEngine().runDays(_profile, {template}, force: true);
     expect(
@@ -472,25 +495,6 @@ void main() {
         },
       };
 
-      final history =
-          (_env['SOAK_HISTORY'] ?? '30,180,365,730')
-              .split(',')
-              .map(int.parse)
-              .toSet()
-              .toList()
-            ..sort();
-      // A single length compares a history with itself, and live days beyond
-      // the shortest length would give it more history than its label says.
-      expect(
-        history.length,
-        greaterThanOrEqualTo(2),
-        reason: 'SOAK_HISTORY needs two or more distinct lengths',
-      );
-      expect(
-        history.first,
-        greaterThanOrEqualTo(liveDays),
-        reason: 'SOAK_HISTORY lengths must be at least SOAK_DAYS',
-      );
       final results = <int, Map<String, int>>{};
       for (final days in history) {
         await extendHistoryTo(days);
