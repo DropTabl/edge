@@ -16,8 +16,10 @@ on:
         description: History lengths (days) to time loads at
         default: '30,180,365,730'
 
+# Per event, so a manual run never cancels the nightly one before its report
+# is uploaded.
 concurrency:
-  group: soak-${{ github.ref }}
+  group: soak-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 permissions:

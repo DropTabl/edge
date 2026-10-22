@@ -30,6 +30,10 @@
 //     branch, which still prunes. A healthy install prunes at the same cutoff:
 //     its unfinalized days are the newest ones, inside the retention window.
 //     The stuck-day hold is pure and covered by raw_prune_gating_test.
+//   * NOT REAL either: the cloned rows keep the template day's timestamps
+//     inside their payloads, and the cloned substrate_archive buckets keep
+//     the template's blob. Nothing timed here decodes either; they stand in
+//     for the bytes and the row counts, which is what this measures.
 //
 // The per-day numbers land in build/soak/db_growth.csv.
 
@@ -472,13 +476,34 @@ void main() {
           (_env['SOAK_HISTORY'] ?? '30,180,365,730')
               .split(',')
               .map(int.parse)
+              .toSet()
               .toList()
             ..sort();
+      // A single length compares a history with itself, and live days beyond
+      // the shortest length would give it more history than its label says.
+      expect(
+        history.length,
+        greaterThanOrEqualTo(2),
+        reason: 'SOAK_HISTORY needs two or more distinct lengths',
+      );
+      expect(
+        history.first,
+        greaterThanOrEqualTo(liveDays),
+        reason: 'SOAK_HISTORY lengths must be at least SOAK_DAYS',
+      );
       final results = <int, Map<String, int>>{};
       for (final days in history) {
         await extendHistoryTo(days);
         // One real pass so housekeeping (archive eviction) sees the new history.
         await DerivationEngine().run(_profile, heavy: true);
+        // A load that got fast by coming back empty is not a pass.
+        expect(
+          (await HomeData.load(repo)).dayId,
+          isNotNull,
+          reason: 'Home has no day at $days days of history',
+        );
+        expect(await repo.getToday(), isNotEmpty);
+        expect((await repo.availableDays()).length, greaterThanOrEqualTo(days));
         results[days] = {
           for (final e in loads.entries) e.key: await medianMs(e.value),
         };
